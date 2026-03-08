@@ -6,6 +6,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 
 class Config:
+    BASE_DIR = Path(__file__).resolve().parent
     """基础配置"""
     SECRET_KEY = os.environ.get('SECRET_KEY') or 'pc-config-recommend-secret-key-2024'
     SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL') or f'sqlite:///{BASE_DIR}/data/pc_config.db'

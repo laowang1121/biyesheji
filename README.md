@@ -1,4 +1,9 @@
-# 基于Python的个性化电脑配置推荐系统
+import os
+from pathlib import Path
+
+class Config:
+    BASE_DIR = Path(__file__).resolve().parent  # 定义项目的根目录
+    # 其他配置项...# 基于Python的个性化电脑配置推荐系统
 
 ## 项目简介
 
