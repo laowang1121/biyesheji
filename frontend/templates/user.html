@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>配置推荐 - 电脑配置推荐系统</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="layout">
+        <aside class="sidebar">
+            <a href="#" class="active" data-tab="recommend">配置推荐</a>
+            <a href="#" data-tab="bug">Bug反馈</a>
+            <a href="{{ url_for('logout') }}">退出登录</a>
+        </aside>
+        <main class="main">
+            <h1>欢迎，<span id="username"></span></h1>
+
+            <!-- 配置推荐 -->
+            <div id="tab-recommend" class="tab-content show">
+                <div class="card dialog-box">
+                    <h2>配置推荐</h2>
+                    <p style="color: var(--text-muted); margin-bottom: 1rem;">请输入您的预算，系统将根据使用场景为您推荐最优配置。</p>
+                    <div class="input-row">
+                        <input type="number" id="budget" placeholder="预算金额（元）" value="5000" min="1000" max="100000" step="100">
+                        <select id="mode">
+                            <option value="office">办公模式</option>
+                            <option value="gaming">游戏模式</option>
+                            <option value="custom">自定义分配</option>
+                        </select>
+                        <button class="btn btn-primary" id="btnRecommend">获取推荐</button>
+                    </div>
+                    <div id="customAlloc" class="custom-allocation hidden">
+                        <div><label>CPU %</label><input type="number" id="alloc_cpu" min="0" max="100" value="15"></div>
+                        <div><label>显卡 %</label><input type="number" id="alloc_gpu" min="0" max="100" value="35"></div>
+                        <div><label>主板 %</label><input type="number" id="alloc_motherboard" min="0" max="100" value="8"></div>
+                        <div><label>内存 %</label><input type="number" id="alloc_memory" min="0" max="100" value="15"></div>
+                        <div><label>固态 %</label><input type="number" id="alloc_ssd" min="0" max="100" value="8"></div>
+                        <div><label>电源 %</label><input type="number" id="alloc_psu" min="0" max="100" value="7"></div>
+                        <div><label>散热 %</label><input type="number" id="alloc_cooling" min="0" max="100" value="4"></div>
+                        <div><label>机箱 %</label><input type="number" id="alloc_case" min="0" max="100" value="4"></div>
+                        <div style="align-self: end;"><span id="allocSum" style="color: var(--text-muted);">总和: 96%</span></div>
+                    </div>
+                    <div id="result" class="result-box hidden"></div>
+                </div>
+            </div>
+
+            <!-- Bug反馈 -->
+            <div id="tab-bug" class="tab-content">
+                <div class="card">
+                    <h2>Bug反馈</h2>
+                    <form id="bugForm" class="bug-form">
+                        <div class="form-group">
+                            <label>标题</label>
+                            <input type="text" id="bugTitle" required placeholder="简要描述问题">
+                        </div>
+                        <div class="form-group">
+                            <label>详细描述</label>
+                            <textarea id="bugContent" required placeholder="请详细描述您遇到的问题..."></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-primary">提交反馈</button>
+                    </form>
+                </div>
+                <div class="card">
+                    <h2>我的反馈记录</h2>
+                    <div id="bugList" class="bug-list"></div>
+                </div>
+            </div>
+        </main>
+    </div>
+    <script>
+        const api = async (url, opts = {}) => {
+            const r = await fetch(url, { credentials: 'include', headers: { 'Content-Type': 'application/json' }, ...opts });
+            const j = await r.json();
+            if (r.status === 401) { location.href = '/login'; return; }
+            return j;
+        };
+
+        // 加载用户信息
+        api('/api/user/me').then(r => { if (r.success) document.getElementById('username').textContent = r.user.username; });
+
+        // 模式切换
+        document.getElementById('mode').onchange = () => {
+            document.getElementById('customAlloc').classList.toggle('hidden', document.getElementById('mode').value !== 'custom');
+        };
+
+        // 自定义分配总和
+        const allocInputs = ['cpu','gpu','motherboard','memory','ssd','psu','cooling','case'].map(k => document.getElementById('alloc_'+k));
+        allocInputs.forEach(i => { if (i) i.oninput = updateAllocSum; });
+        function updateAllocSum() {
+            const sum = allocInputs.reduce((s, i) => s + (parseFloat(i?.value) || 0), 0);
+            document.getElementById('allocSum').textContent = '总和: ' + sum + '%';
+        }
+
+        // 推荐
+        document.getElementById('btnRecommend').onclick = async () => {
+            const budget = parseFloat(document.getElementById('budget').value);
+            const mode = document.getElementById('mode').value;
+            let body = { budget, mode };
+            if (mode === 'custom') {
+                body.custom_allocation = {
+                    cpu: parseFloat(document.getElementById('alloc_cpu').value) || 0,
+                    gpu: parseFloat(document.getElementById('alloc_gpu').value) || 0,
+                    motherboard: parseFloat(document.getElementById('alloc_motherboard').value) || 0,
+                    memory: parseFloat(document.getElementById('alloc_memory').value) || 0,
+                    ssd: parseFloat(document.getElementById('alloc_ssd').value) || 0,
+                    psu: parseFloat(document.getElementById('alloc_psu').value) || 0,
+                    cooling: parseFloat(document.getElementById('alloc_cooling').value) || 0,
+                    case: parseFloat(document.getElementById('alloc_case').value) || 0
+                };
+            }
+            const res = await api('/api/recommend', { method: 'POST', body: JSON.stringify(body) });
+            const el = document.getElementById('result');
+            if (res.success) {
+                const d = res.data;
+                let html = '<h3>推荐配置</h3>';
+                for (const [k, v] of Object.entries(d.components || {})) {
+                    const names = { cpu:'CPU', gpu:'显卡', motherboard:'主板', memory:'内存', ssd:'固态', cooling:'散热', case:'机箱', psu:'电源' };
+                    html += `<div class="result-item"><span>${names[k] || k}: ${v.model || v.brand}</span><span>¥${v.price}</span>${v.link ? `<a href="${v.link}" target="_blank">购买</a>` : ''}</div>`;
+                }
+                html += `<div class="result-total">总价: ¥${d.total_price} (预算使用率 ${d.budget_usage}%)</div>`;
+                el.innerHTML = html;
+                el.classList.remove('hidden');
+            } else {
+                el.innerHTML = '<p style="color: var(--danger);">' + (res.msg || '获取失败') + '</p>';
+                el.classList.remove('hidden');
+            }
+        };
+
+        // Bug提交
+        document.getElementById('bugForm').onsubmit = async (e) => {
+            e.preventDefault();
+            const res = await api('/api/bug/submit', {
+                method: 'POST',
+                body: JSON.stringify({ title: document.getElementById('bugTitle').value, content: document.getElementById('bugContent').value })
+            });
+            if (res.success) { alert('提交成功'); document.getElementById('bugForm').reset(); loadBugs(); }
+            else alert(res.msg || '提交失败');
+        };
+
+        function loadBugs() {
+            api('/api/bug/list').then(r => {
+                const list = document.getElementById('bugList');
+                if (r.success && r.data.length) {
+                    list.innerHTML = r.data.map(b => `<div class="item"><strong>${b.title}</strong> <span class="status ${b.status}">${b.status}</span><p>${b.content}</p><small>${b.created_at}</small></div>`).join('');
+                } else list.innerHTML = '<p style="color: var(--text-muted);">暂无反馈记录</p>';
+            });
+        }
+
+        // 标签切换
+        document.querySelectorAll('.sidebar a[data-tab]').forEach(a => {
+            a.onclick = (e) => {
+                e.preventDefault();
+                document.querySelectorAll('.sidebar a').forEach(x => x.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(x => x.classList.remove('show'));
+                a.classList.add('active');
+                document.getElementById('tab-' + a.dataset.tab)?.classList.add('show');
+                if (a.dataset.tab === 'bug') loadBugs();
+            };
+        });
+
+        loadBugs();
+    </script>
+</body>
+</html>

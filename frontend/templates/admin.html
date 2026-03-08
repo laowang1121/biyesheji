@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>管理员 - 电脑配置推荐系统</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="layout">
+        <aside class="sidebar">
+            <a href="#" class="active" data-tab="users">用户管理</a>
+            <a href="#" data-tab="components">配件管理</a>
+            <a href="#" data-tab="bugs">Bug反馈</a>
+            <a href="{{ url_for('logout') }}">退出登录</a>
+        </aside>
+        <main class="main">
+            <h1>管理员控制台</h1>
+
+            <!-- 用户管理 -->
+            <div id="tab-users" class="tab-content show">
+                <div class="card">
+                    <h2>用户列表</h2>
+                    <button class="btn btn-primary" style="margin-bottom: 1rem;" onclick="showAddUser()">添加用户</button>
+                    <div id="addUserForm" class="hidden" style="margin-bottom: 1rem; padding: 1rem; background: var(--bg-dark); border-radius: 8px;">
+                        <input type="text" id="newUsername" placeholder="用户名">
+                        <input type="password" id="newPassword" placeholder="密码">
+                        <label><input type="checkbox" id="newIsAdmin"> 管理员</label>
+                        <button class="btn btn-primary" onclick="addUser()">确认添加</button>
+                    </div>
+                    <table>
+                        <thead><tr><th>ID</th><th>用户名</th><th>角色</th><th>操作</th></tr></thead>
+                        <tbody id="userList"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 配件管理 -->
+            <div id="tab-components" class="tab-content">
+                <div class="card">
+                    <h2>配件数据管理</h2>
+                    <p style="color: var(--text-muted); margin-bottom: 1rem;">爬虫数据统计：<span id="crawlerStats"></span></p>
+                    <div class="tabs" id="compTabs">
+                        <span class="tab active" data-comp="cpu">CPU</span>
+                        <span class="tab" data-comp="motherboard">主板</span>
+                        <span class="tab" data-comp="gpu">显卡</span>
+                        <span class="tab" data-comp="memory">内存</span>
+                        <span class="tab" data-comp="ssd">固态</span>
+                        <span class="tab" data-comp="cooling">散热</span>
+                        <span class="tab" data-comp="case">机箱</span>
+                        <span class="tab" data-comp="psu">电源</span>
+                    </div>
+                    <div style="margin-bottom: 1rem;">
+                        <button class="btn btn-primary" onclick="showAddComp()">添加配件</button>
+                        <div id="addCompForm" class="hidden" style="margin-top: 1rem; padding: 1rem; background: var(--bg-dark); border-radius: 8px; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0.75rem;">
+                            <div><label>品牌</label><input type="text" id="ac_brand"></div>
+                            <div><label>型号</label><input type="text" id="ac_model"></div>
+                            <div><label>价格</label><input type="number" id="ac_price" step="0.01"></div>
+                            <div><label>链接</label><input type="text" id="ac_link" placeholder="https://"></div>
+                            <div id="ac_extra"></div>
+                            <div style="align-self: end;"><button class="btn btn-primary" onclick="addComp()">确认添加</button></div>
+                        </div>
+                    </div>
+                    <div id="compTableWrap">
+                        <table><thead><tr id="compHead"></tr></thead><tbody id="compBody"></tbody></table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Bug反馈 -->
+            <div id="tab-bugs" class="tab-content">
+                <div class="card">
+                    <h2>用户Bug反馈</h2>
+                    <div id="adminBugList" class="bug-list"></div>
+                </div>
+            </div>
+        </main>
+    </div>
+    <script>
+        const api = async (url, opts = {}) => {
+            const r = await fetch(url, { credentials: 'include', headers: { 'Content-Type': 'application/json' }, ...opts });
+            const j = await r.json();
+            if (r.status === 401) { location.href = '/login'; return; }
+            return j;
+        };
+
+        // 用户管理
+        function loadUsers() {
+            api('/api/admin/users').then(r => {
+                if (!r.success) return alert(r.msg);
+                const tbody = document.getElementById('userList');
+                tbody.innerHTML = r.data.map(u => `
+                    <tr><td>${u.id}</td><td>${u.username}</td><td>${u.is_admin ? '管理员' : '普通用户'}</td>
+                    <td><button class="btn-sm btn-edit" onclick="editUser(${u.id}, '${u.username}', ${u.is_admin})">编辑</button>
+                    ${u.id !== (window.currentUserId || 0) ? `<button class="btn-sm btn-del" onclick="delUser(${u.id})">删除</button>` : ''}</td></tr>
+                `).join('');
+            });
+        }
+        api('/api/user/me').then(r => { if (r.success) window.currentUserId = r.user.id; loadUsers(); });
+
+        function showAddUser() { document.getElementById('addUserForm').classList.toggle('hidden'); }
+        async function addUser() {
+            const res = await api('/api/admin/users', {
+                method: 'POST',
+                body: JSON.stringify({
+                    username: document.getElementById('newUsername').value,
+                    password: document.getElementById('newPassword').value,
+                    is_admin: document.getElementById('newIsAdmin').checked
+                })
+            });
+            if (res.success) { alert('添加成功'); showAddUser(); document.getElementById('newUsername').value = ''; document.getElementById('newPassword').value = ''; loadUsers(); }
+            else alert(res.msg);
+        }
+        async function delUser(id) { if (!confirm('确定删除？')) return; const r = await api('/api/admin/users/' + id, { method: 'DELETE' }); if (r.success) loadUsers(); else alert(r.msg); }
+        function editUser(id, uname, isAdmin) {
+            const newU = prompt('新用户名', uname);
+            const newAdmin = confirm('设为管理员？');
+            if (newU !== null) api('/api/admin/users/' + id, { method: 'PUT', body: JSON.stringify({ username: newU, is_admin: newAdmin }) }).then(r => { if (r.success) loadUsers(); else alert(r.msg); });
+        }
+
+        // 配件管理
+        const compNames = { cpu:'CPU', motherboard:'主板', gpu:'显卡', memory:'内存', ssd:'固态', cooling:'散热', case:'机箱', psu:'电源' };
+        function loadCompStats() {
+            api('/api/admin/crawler/stats').then(r => {
+                if (r.success) document.getElementById('crawlerStats').textContent = Object.entries(r.data).map(([k,v]) => compNames[k]+':'+v).join(' | ');
+            });
+        }
+        let currentComp = 'cpu';
+        function loadComponents(comp) {
+            currentComp = comp || currentComp;
+            api('/api/admin/components/' + currentComp).then(r => {
+                if (!r.success) return;
+                const head = document.getElementById('compHead');
+                const body = document.getElementById('compBody');
+                if (!r.data.length) { head.innerHTML = '<tr><th>暂无数据</th></tr>'; body.innerHTML = ''; return; }
+                const cols = Object.keys(r.data[0]).filter(k => k !== 'id');
+                head.innerHTML = '<th>ID</th>' + cols.map(c => '<th>' + c + '</th>').join('') + '<th>操作</th>';
+                body.innerHTML = r.data.map(row => `
+                    <tr><td>${row.id}</td>${cols.map(c => '<td>' + (row[c] ?? '') + '</td>').join('')}
+                    <td><button class="btn-sm btn-del" onclick="delComp(${row.id})">删除</button></td></tr>
+                `).join('');
+            });
+        }
+        async function delComp(id) {
+            if (!confirm('确定删除？')) return;
+            const r = await api('/api/admin/components/' + currentComp + '/' + id, { method: 'DELETE' });
+            if (r.success) loadComponents(); else alert(r.msg);
+        }
+        document.getElementById('compTabs').addEventListener('click', e => {
+            if (e.target.dataset.comp) {
+                document.querySelectorAll('#compTabs .tab').forEach(t => t.classList.remove('active'));
+                e.target.classList.add('active');
+                loadComponents(e.target.dataset.comp);
+                updateAddCompExtra(e.target.dataset.comp);
+            }
+        });
+
+        const compExtraFields = {
+            cpu: [{k:'series',l:'系列'},{k:'package_type',l:'类型(散片/盒装)'}],
+            motherboard: [{k:'socket',l:'插槽'}],
+            gpu: [{k:'series',l:'系列'},{k:'chip_brand',l:'芯片品牌'}],
+            memory: [{k:'type',l:'类型(DDR4/DDR5)'},{k:'capacity',l:'容量'}],
+            ssd: [{k:'interface',l:'接口(PCIe3.0/4.0)'},{k:'capacity',l:'容量'}],
+            cooling: [{k:'type',l:'类型(风冷/水冷240/水冷360)'}],
+            case: [{k:'style',l:'款式(海景房/普通)'}],
+            psu: [{k:'wattage',l:'功率'},{k:'certification',l:'认证'}]
+        };
+        function updateAddCompExtra(comp) {
+            const el = document.getElementById('ac_extra');
+            const fields = compExtraFields[comp] || [];
+            el.innerHTML = fields.map(f => `<div><label>${f.l}</label><input type="text" id="ac_${f.k}"></div>`).join('');
+        }
+        function showAddComp() {
+            document.getElementById('addCompForm').classList.toggle('hidden');
+            updateAddCompExtra(currentComp);
+        }
+        async function addComp() {
+            const base = { brand: document.getElementById('ac_brand').value, model: document.getElementById('ac_model').value, price: parseFloat(document.getElementById('ac_price').value) || 0, link: document.getElementById('ac_link').value || '' };
+            const fields = compExtraFields[currentComp] || [];
+            fields.forEach(f => { const v = document.getElementById('ac_'+f.k)?.value; if (v) base[f.k] = v; });
+            const r = await api('/api/admin/components/' + currentComp, { method: 'POST', body: JSON.stringify(base) });
+            if (r.success) { alert('添加成功'); document.getElementById('addCompForm').classList.add('hidden'); loadComponents(); loadCompStats(); }
+            else alert(r.msg || '添加失败');
+        }
+
+        // Bug列表
+        function loadAdminBugs() {
+            api('/api/admin/bugs').then(r => {
+                if (!r.success) return;
+                const list = document.getElementById('adminBugList');
+                list.innerHTML = r.data.map(b => `
+                    <div class="item">
+                        <strong>${b.title}</strong> - ${b.username} <span class="status ${b.status}">${b.status}</span>
+                        <p>${b.content}</p>
+                        <small>${b.created_at}</small>
+                        ${b.status === 'pending' ? `<button class="btn-sm btn-edit" onclick="resolveBug(${b.id})">标记已解决</button>` : ''}
+                    </div>
+                `).join('');
+            });
+        }
+        async function resolveBug(id) {
+            const r = await api('/api/admin/bugs/' + id, { method: 'PUT', body: JSON.stringify({ status: 'resolved' }) });
+            if (r.success) loadAdminBugs(); else alert(r.msg);
+        }
+
+        // 标签切换
+        document.querySelectorAll('.sidebar a[data-tab]').forEach(a => {
+            a.onclick = (e) => {
+                e.preventDefault();
+                document.querySelectorAll('.sidebar a').forEach(x => x.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(x => x.classList.remove('show'));
+                a.classList.add('active');
+                document.getElementById('tab-' + a.dataset.tab)?.classList.add('show');
+                if (a.dataset.tab === 'components') { loadCompStats(); loadComponents(); updateAddCompExtra(currentComp); }
+                if (a.dataset.tab === 'bugs') loadAdminBugs();
+            };
+        });
+
+        loadCompStats();
+        loadComponents();
+    </script>
+</body>
+</html>

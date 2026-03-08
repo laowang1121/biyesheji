@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 - 电脑配置推荐系统</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="auth-page">
+    <div class="auth-box">
+        <h1>电脑配置推荐系统</h1>
+        <div id="msg" class="msg hidden"></div>
+        <form id="loginForm">
+            <div class="form-group">
+                <label>用户名</label>
+                <input type="text" name="username" required placeholder="请输入用户名">
+            </div>
+            <div class="form-group">
+                <label>密码</label>
+                <input type="password" name="password" required placeholder="请输入密码">
+            </div>
+            <button type="submit" class="btn">登录</button>
+        </form>
+        <div class="link">还没有账号？<a href="{{ url_for('register_page') }}">立即注册</a></div>
+    </div>
+    <script>
+        document.getElementById('loginForm').onsubmit = async (e) => {
+            e.preventDefault();
+            const fd = new FormData(e.target);
+            const res = await fetch('/api/login', {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username: fd.get('username'), password: fd.get('password') })
+            }).then(r => r.json());
+            const msgEl = document.getElementById('msg');
+            if (res.success) {
+                msgEl.textContent = '登录成功，跳转中...';
+                msgEl.className = 'msg ok';
+                msgEl.classList.remove('hidden');
+                setTimeout(() => location.href = '/home', 500);
+            } else {
+                msgEl.textContent = res.msg || '登录失败';
+                msgEl.className = 'msg err';
+                msgEl.classList.remove('hidden');
+            }
+        };
+    </script>
+</body>
+</html>
