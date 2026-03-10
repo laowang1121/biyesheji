@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """数据库模型定义"""
 from datetime import datetime
-from flask_sqlalchemy import SQLAlchemy
-from flask_login import UserMixin
-from werkzeug.security import generate_password_hash, check_password_hash
+from flask_sqlalchemy import SQLAlchemy  # pyright: ignore[reportMissingImports]
+from flask_login import UserMixin  # pyright: ignore[reportMissingImports]
+from werkzeug.security import generate_password_hash, check_password_hash  # pyright: ignore[reportMissingImports]
 
 db = SQLAlchemy()
 

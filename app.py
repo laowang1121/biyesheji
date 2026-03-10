@@ -6,12 +6,12 @@ from flask import Flask, render_template, redirect, url_for
 from flask_cors import CORS
 from flask_login import LoginManager, current_user
 
-from config import Config
+from config import Config, BASE_DIR
 from backend.models import db, User
 from backend.routes import api_bp
 
 # 确保数据目录存在
-Path(Config.BASE_DIR / 'data').mkdir(exist_ok=True)
+Path(BASE_DIR / 'data').mkdir(exist_ok=True)
 
 app = Flask(__name__, static_folder='frontend/static', template_folder='frontend/templates')
 app.config.from_object(Config)
