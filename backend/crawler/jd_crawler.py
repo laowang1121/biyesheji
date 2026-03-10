@@ -39,7 +39,7 @@ class JDCrawler():
 
         # 禁用图片加载和提示框以加快速度
         prefs = {
-            "profile.managed_default_content_settings.images": 2,
+            "profile.managed_default_content_settings.images": 1,
             "credentials_enable_service": False,
             "profile.password_manager_enabled": False
         }
