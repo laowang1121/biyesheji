@@ -19,7 +19,7 @@ def init():
             admin.set_password('admin123')
             db.session.add(admin)
             db.session.commit()
-            print('管理员账号已创建: admin / admin123')
+            print('管理员账号已创建: admin / ')
         
         # 创建示例数据（若数据库为空）
         BaseCrawler.create_sample_data()

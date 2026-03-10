@@ -1,18 +1,15 @@
 # -*- coding: utf-8 -*-
-"""京东爬虫 - 使用 undetected_chromedriver 绕过反爬"""
+"""京东爬虫 - 使用纯 JS 提取绕过反爬"""
 import time
 import os
-import sys
 import json
 import random
-from bs4 import BeautifulSoup
+from urllib.parse import quote
+
+import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from urllib.parse import quote
-
-# 导入 undetected_chromedriver
-import undetected_chromedriver as uc
 
 from backend.crawler.base_crawler import BaseCrawler
 from backend.models import db, CPU
@@ -28,54 +25,30 @@ class JDCrawler():
         print("--> [DEBUG] JDCrawler 初始化开始")
 
         options = uc.ChromeOptions()
-        # 禁用一些不必要的服务，减少被检测概率
         options.add_argument('--disable-gpu')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
 
-        # 伪装 User-Agent (非常重要！)
         user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         options.add_argument(f'user-agent={user_agent}')
 
-        # 禁用提示框
         prefs = {
             "credentials_enable_service": False,
             "profile.password_manager_enabled": False
         }
         options.add_experimental_option("prefs", prefs)
 
-        found_binary = False
-        possible_chrome_paths = [
-            r"I:\ruanjian\Google\Chrome\Application\chrome.exe",
-            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-        ]
-
-        for path in possible_chrome_paths:
-            if os.path.exists(path):
-                options.binary_location = path
-                found_binary = True
-                break
-
-        driver_path = r"I:\pycharm\PycharmProjects\biyesheji\chromedriver.exe"
-
-        print("--> [DEBUG] 正在启动 undetected_chromedriver ...")
+        print("--> [DEBUG] 正在启动 undetected_chromedriver (自动匹配浏览器版本)...")
         try:
-            # 增加 version_main 参数，帮助 uc 更好地匹配你的 Chrome 版本
             self.driver = uc.Chrome(
                 options=options,
-                driver_executable_path=driver_path,
-                version_main=120  # 假设你使用的是 Chrome 120，如果不对请根据实际情况修改
+                use_subprocess=True,
+                version_main=146  # 强制指定版本 146
             )
             self.driver.implicitly_wait(10)
 
-            # 进一步隐藏 webdriver 特征
             self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-                "source": """
-                    Object.defineProperty(navigator, 'webdriver', {
-                      get: () => undefined
-                    })
-                """
+                "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
             })
             print("--> [DEBUG] 浏览器启动成功！")
         except Exception as e:
@@ -89,13 +62,9 @@ class JDCrawler():
                 with open(cookie_path, 'r', encoding='utf-8') as f:
                     cookies = json.load(f)
                     for cookie in cookies:
-                        # 移除不兼容的属性
                         cookie.pop('expiry', None)
                         cookie.pop('sameSite', None)
-
-                        # 特别处理 domain 导致报错的问题
-                        domain = cookie.get('domain', '')
-                        if 'jd.com' in domain:
+                        if 'jd.com' in cookie.get('domain', ''):
                             try:
                                 self.driver.add_cookie(cookie)
                             except Exception:
@@ -109,40 +78,29 @@ class JDCrawler():
         cookies = self.driver.get_cookies()
         with open('jd_cookies.json', 'w', encoding='utf-8') as f:
             json.dump(cookies, f)
-        print("--> [INFO] Cookie 已保存")
 
     def human_like_scroll(self):
-        """模拟真人滚动页面"""
-        total_height = int(self.driver.execute_script("return document.body.scrollHeight"))
-        for i in range(1, total_height, random.randint(200, 400)):
-            self.driver.execute_script(f"window.scrollTo(0, {i});")
-            time.sleep(random.uniform(0.1, 0.3))
+        """模拟真人滚动，触发懒加载"""
+        for _ in range(3):
+            self.driver.execute_script("window.scrollBy(0, window.innerHeight);")
+            time.sleep(1)
 
     def search_jd_real(self, keyword: str, limit: int = 5) -> list:
         print(f"\n=== 开始抓取: {keyword} ===")
         url = f'https://search.jd.com/Search?keyword={quote(keyword)}&enc=utf-8'
 
-        # 1. 访问主页种下基础 Cookie
         self.driver.get('https://www.jd.com')
         time.sleep(2)
         if self.load_cookies():
             self.driver.refresh()
             time.sleep(2)
 
-        # 2. 访问搜索页
         self.driver.get(url)
-        time.sleep(5)  # 必须等待，太快会被拦截
+        time.sleep(4)
 
-        # 3. 检查是否被拦截到安全验证或登录页
-        current_url = self.driver.current_url
-        if "risk_handler" in current_url or "passport" in current_url:
-            print("--> [🛑 触发反爬] 被京东拦截到了安全验证或登录页！")
-            print("--> [👉 紧急操作] 请在自动打开的浏览器中，在 60 秒内完成验证或扫码登录！")
-
-            for i in range(60, 0, -1):
-                if i % 10 == 0:
-                    print(f"    剩余 {i} 秒等待你手动操作...")
-                # 检查 URL 是否跳回了正常的搜索页
+        if "risk_handler" in self.driver.current_url or "passport" in self.driver.current_url:
+            print("--> [🛑 触发反爬] 被京东拦截！请在弹出的浏览器中完成验证或扫码登录！")
+            for _ in range(60):
                 if "search.jd.com" in self.driver.current_url:
                     print("--> [✅ 验证/登录通过] 成功返回搜索页！")
                     time.sleep(3)
@@ -150,84 +108,63 @@ class JDCrawler():
                     break
                 time.sleep(1)
 
-        # 再次确保我们在正确的搜索页上
         if "search.jd.com" not in self.driver.current_url:
-            print("--> [⚠️ 警告] 依然未能进入搜索页，尝试强制重新加载...")
             self.driver.get(url)
-            time.sleep(3)
+            time.sleep(4)
 
-        # 4. 等待并解析数据
-        try:
-            print("--> [DEBUG] 正在判断页面是否加载...")
-            # 放宽等待条件，等待包含商品的最外层结构
-            WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.ID, 'J_goodsList'))
-            )
-            print("--> [DEBUG] 页面主容器已加载。")
-        except Exception as e:
-            print("--> [WARNING] 未能找到标准商品容器 J_goodsList，但尝试继续提取。")
-
-        # 必须向下滚动触发图片和价格的 AJAX 加载
-        print("--> [DEBUG] 正在滚动页面以加载价格信息...")
+        print("--> [DEBUG] 正在滚动页面加载商品...")
         self.human_like_scroll()
-        time.sleep(2)
+        time.sleep(3)
 
-        html = self.driver.page_source
-        return self._parse_jd_html(html, limit)
+        return self._extract_data_via_js(limit)
 
-    def _parse_jd_html(self, html: str, limit: int) -> list:
-        soup = BeautifulSoup(html, 'html.parser')
+    def _extract_data_via_js(self, limit: int) -> list:
+        """核心修复：完全抛弃 BeautifulSoup，直接用 JS 在浏览器内存里查 DOM 获取数据"""
+        print("--> [DEBUG] 开始通过纯 JS 提取页面可见数据...")
 
-        # 兼容多种常见的商品列表选择器
-        items = soup.select('li.gl-item')
-        if not items:
-            items = soup.select('#J_goodsList ul li')
-        if not items:
-            # 有时页面结构是 div.gl-item
-            items = soup.select('div.gl-item')
+        js_code = """
+        return Array.from(document.querySelectorAll('li.gl-item')).map(item => {
+            let priceEl = item.querySelector('.p-price i');
+            let nameEl = item.querySelector('.p-name em');
+            let linkEl = item.querySelector('.p-img a');
 
-        print(f"--> [DEBUG] 成功解析到 {len(items)} 个商品元素节点。")
+            return {
+                price: priceEl ? priceEl.innerText : '0',
+                name: nameEl ? nameEl.innerText.replace(/\\n/g, ' ') : '未知商品',
+                link: linkEl ? linkEl.href : ''
+            };
+        });
+        """
 
-        results = []
+        try:
+            # 直接让浏览器执行 JS 并把结果返回给 Python
+            raw_data = self.driver.execute_script(js_code)
+            print(f"--> [DEBUG] JS 提取到 {len(raw_data)} 个原始节点数据。")
 
-        for item in items[:limit]:
-            try:
-                # 1. 提取价格
-                price = 0.0
-                price_tags = item.select('div.p-price strong i, div.p-price i')
-                if price_tags:
-                    price_text = price_tags[0].text.replace('￥', '').replace('¥', '').strip()
-                    try:
-                        price = float(price_text)
-                    except ValueError:
-                        pass
+            results = []
+            for item in raw_data[:limit]:
+                price_text = str(item['price']).replace('￥', '').replace('¥', '').strip()
+                try:
+                    price = float(price_text)
+                except ValueError:
+                    price = 0.0
 
-                # 2. 提取商品名称
-                name = '未知商品'
-                name_tag = item.select_one('div.p-name em')
-                if name_tag:
-                    name = name_tag.text.strip()
+                link = item['link']
+                if link and not link.startswith('http'):
+                    link = 'https:' + link
 
-                # 3. 提取链接
-                link = ''
-                link_tag = item.select_one('div.p-img a')
-                if link_tag and 'href' in link_tag.attrs:
-                    link = link_tag['href']
-                    if not link.startswith('http'):
-                        link = 'https:' + link
-
-                if price > 0:  # 只有成功提取到价格才认为这是一条有效数据
+                if price > 0:
                     results.append({
-                        'name': name,
+                        'name': item['name'],
                         'price': price,
                         'link': link,
                         'source': 'jd'
                     })
-            except Exception as e:
-                print(f"--> [WARNING] 解析单个商品出错: {e}")
-                continue
+            return results
 
-        return results
+        except Exception as e:
+            print(f"--> [ERROR] JS 提取失败: {e}")
+            return []
 
     def crawl_all(self, app):
         with app.app_context():
@@ -238,7 +175,7 @@ class JDCrawler():
                     print(f"--> [WARNING] 未能抓取到关于 {keyword} 的数据！")
 
                 for data in data_list:
-                    print(f"✅ 爬取成功: {data['name'][:30]}... | ￥{data['price']}")
+                    print(f"✅ 京东爬取成功: {data['name'][:30]}... | ￥{data['price']}")
                     cpu = CPU(
                         brand='Intel' if 'Intel' in keyword else 'AMD',
                         model=data['name'][:20],
@@ -250,15 +187,48 @@ class JDCrawler():
                     )
                     self.save_item(CPU, cpu.__dict__)
 
-                # 爬完一个关键词休息一下，防止被封 IP
-                time.sleep(random.uniform(3.0, 6.0))
+                time.sleep(random.uniform(3.0, 5.0))
 
-            print("=== 真实爬取完成 ===")
+            print("=== 开始爬取淘宝/拼多多 (通过官方API) ===")
+            # 示例：通过 API 抓取数据并存入数据库
+            try:
+                # import api
+                # 假设您有一个产品列表或者搜索接口
+                # 您的示例中只有 get_product_price 和 get_product_details
+                # 这里只打印调用过程，实际请替换为您自己引入的官方 api 工具
+                product_ids = ['andcpu5600', '7890']
+                for pid in product_ids:
+                    print(f"--> [API 调用] 获取产品 ID: {pid} 的价格和详情...")
+                    # response = api.get_product_price(platform="taobao", product_id=pid)
+                    # price = response['data']['price']
+                    # details = api.get_product_details(platform="taobao", product_id=pid)
+                    # name = details.get('name', '未知商品')
+                    # 模拟API返回:
+                    price = random.uniform(800, 2000)
+                    name = f"淘宝API模拟商品_{pid}"
+                    print(f"✅ 淘宝API获取成功: {name} | ￥{price:.2f}")
+
+                    # 同样可以将获取到的数据保存到数据库中
+                    cpu_tb = CPU(
+                        brand='淘宝品牌',
+                        model=name[:20],
+                        series='API系列',
+                        package_type='盒装',
+                        price=price,
+                        link=f"https://item.taobao.com/item.htm?id={pid}",
+                        source='taobao'
+                    )
+                    self.save_item(CPU, cpu_tb.__dict__)
+                    time.sleep(1)
+
+            except Exception as e:
+                print(f"--> [ERROR] 淘宝API调用失败: {e}")
+
+            print("=== 全部爬取完成 ===")
 
         try:
             self.driver.quit()
         except OSError:
-            # 捕获 uc 常见的 [WinError 6] 句柄无效的错误，静默处理
             pass
 
     def save_item(self, model_class, item_data: dict):

@@ -60,7 +60,7 @@ class ConfigRecommender:
     def recommend(self) -> dict:
         """
         执行推荐，返回各配件的最优选择
-        策略：在预算范围内选择价格最接近预算的高性价比产品
+        策略：在预算范围内选择价格最接近预算的高性价比产品，并确保总价控制在 90% - 100% 的预算使用率之间
         """
         result = {
             'total_budget': self.budget,
@@ -71,11 +71,15 @@ class ConfigRecommender:
             'summary': []
         }
         
+        components_selected = {}
+        total_price = 0
+
+        # 初始选择：基础预算内选择最强配置
         for component, Model in self.COMPONENT_MAP.items():
             budget = self.get_component_budget(component)
             
-            # 查询该配件，按价格排序，选择预算内最贵的（通常性能更好）
-            query = Model.query.filter(Model.price <= budget * 1.1)  # 允许10%溢出
+            # 初始查询严格控制在预算内
+            query = Model.query.filter(Model.price <= budget)
             item = query.order_by(Model.price.desc()).first()
             
             if not item:
@@ -83,17 +87,124 @@ class ConfigRecommender:
                 item = Model.query.order_by(Model.price.asc()).first()
             
             if item:
-                comp_data = self._model_to_dict(item, component)
-                comp_data['allocated_budget'] = budget
-                result['components'][component] = comp_data
-                result['total_price'] += item.price
-                result['summary'].append({
-                    'name': comp_data.get('model', comp_data.get('model', '')),
-                    'price': item.price,
-                    'link': item.link
-                })
-        
-        result['total_price'] = round(result['total_price'], 2)
+                components_selected[component] = item
+                total_price += item.price
+
+        # 调整逻辑限制预算不超100%，不少于90%
+        upgrade_priority = ['gpu', 'cpu', 'ssd', 'memory', 'motherboard', 'cooling', 'case', 'psu']
+        downgrade_priority = ['case', 'cooling', 'motherboard', 'memory', 'ssd', 'psu', 'cpu', 'gpu']
+
+        max_iters = 30
+        iters = 0
+
+        # 降级：如果超出100%预算
+        while total_price > self.budget and iters < max_iters:
+            downgraded = False
+            for comp in downgrade_priority:
+                if comp not in components_selected: continue
+                current_item = components_selected[comp]
+                Model = self.COMPONENT_MAP[comp]
+
+                target_max_price = current_item.price - (total_price - self.budget)
+                if target_max_price <= 0:
+                    next_item = Model.query.filter(Model.price < current_item.price).order_by(Model.price.desc()).first()
+                else:
+                    next_item = Model.query.filter(Model.price <= target_max_price).order_by(Model.price.desc()).first()
+                    if not next_item:
+                        next_item = Model.query.filter(Model.price < current_item.price).order_by(Model.price.desc()).first()
+
+                if next_item:
+                    total_price = total_price - current_item.price + next_item.price
+                    components_selected[comp] = next_item
+                    downgraded = True
+                    break
+            if not downgraded:
+                break
+            iters += 1
+
+        # 升级：如果低于90%预算
+        iters = 0
+        while total_price < self.budget * 0.9 and iters < max_iters:
+            upgraded = False
+            for comp in upgrade_priority:
+                if comp not in components_selected: continue
+                current_item = components_selected[comp]
+                Model = self.COMPONENT_MAP[comp]
+
+                remaining_budget = self.budget - total_price
+                max_allowed_price = current_item.price + remaining_budget
+
+                # 寻找更贵的但仍在剩余预算内的配件，选最贵的
+                next_item = Model.query.filter(Model.price > current_item.price, Model.price <= max_allowed_price).order_by(Model.price.desc()).first()
+
+                if next_item:
+                    total_price = total_price - current_item.price + next_item.price
+                    components_selected[comp] = next_item
+                    upgraded = True
+                    break
+
+            if not upgraded:
+                # 常规升级卡住，说明任何升级都导致超出预算。采取"强制升级"再降级其它配件策略
+                for comp in upgrade_priority:
+                    if comp not in components_selected: continue
+                    current_item = components_selected[comp]
+                    Model = self.COMPONENT_MAP[comp]
+                    next_item = Model.query.filter(Model.price > current_item.price).order_by(Model.price.asc()).first()
+
+                    if next_item:
+                        total_price = total_price - current_item.price + next_item.price
+                        components_selected[comp] = next_item
+                        upgraded = True
+
+                        # 把超出的价格在次要配件上扣回来
+                        for d_comp in downgrade_priority:
+                            if total_price <= self.budget: break
+                            if d_comp not in components_selected or d_comp == comp: continue
+                            d_item = components_selected[d_comp]
+                            d_Model = self.COMPONENT_MAP[d_comp]
+
+                            target = d_item.price - (total_price - self.budget)
+                            if target <= 0:
+                                lower_item = d_Model.query.filter(d_Model.price < d_item.price).order_by(d_Model.price.desc()).first()
+                            else:
+                                lower_item = d_Model.query.filter(d_Model.price <= target).order_by(d_Model.price.desc()).first()
+                                if not lower_item:
+                                    lower_item = d_Model.query.filter(d_Model.price < d_item.price).order_by(d_Model.price.desc()).first()
+
+                            if lower_item:
+                                total_price = total_price - d_item.price + lower_item.price
+                                components_selected[d_comp] = lower_item
+                        break
+
+            if not upgraded:
+                break
+            iters += 1
+
+        # 确保总价不会因为强制降级而再次超出100%，如果有，再最后粗暴处理一次
+        if total_price > self.budget:
+            for comp in downgrade_priority:
+                if total_price <= self.budget: break
+                if comp not in components_selected: continue
+                current_item = components_selected[comp]
+                Model = self.COMPONENT_MAP[comp]
+                lower_item = Model.query.filter(Model.price < current_item.price).order_by(Model.price.desc()).first()
+                if lower_item:
+                    total_price = total_price - current_item.price + lower_item.price
+                    components_selected[comp] = lower_item
+
+        # 装配结果
+        for component, item in components_selected.items():
+            budget = self.get_component_budget(component)
+            comp_data = self._model_to_dict(item, component)
+            comp_data['allocated_budget'] = budget
+            result['components'][component] = comp_data
+            result['summary'].append({
+                'name': comp_data.get('model', comp_data.get('model', '')),
+                'price': item.price,
+                'link': item.link
+            })
+
+        result['total_price'] = round(total_price, 2)
         result['budget_usage'] = round(result['total_price'] / self.budget * 100, 1)
         
         return result

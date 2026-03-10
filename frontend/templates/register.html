@@ -19,19 +19,35 @@
                 <label>密码</label>
                 <input type="password" name="password" required placeholder="请输入密码">
             </div>
+            <div class="form-group captcha-group">
+                <label>验证码</label>
+                <div style="display:flex;align-items:center;gap:8px; margin-bottom: 12px;">
+                    <img id="captchaImg" src="/api/captcha?v=" alt="验证码" style="height:50px;border:1px solid #ddd;cursor:pointer; " title="点击刷新">
+                    <button type="button" id="refreshCaptcha" class="btn" style="height:50px; display:flex; align-items:center; margin-top: -2px;justify-content:center; padding:0 15px;">刷新</button>
+                </div>
+                <input type="text" name="captcha" required placeholder="输入图片中的字符" maxlength="6">
+            </div>
             <button type="submit" class="btn">注册</button>
         </form>
         <div class="link">已有账号？<a href="{{ url_for('login_page') }}">立即登录</a></div>
     </div>
     <script>
+        function refreshCaptcha() {
+            const img = document.getElementById('captchaImg');
+            img.src = '/api/captcha?v=' + Date.now();
+        }
+        document.getElementById('captchaImg').addEventListener('click', refreshCaptcha);
+        document.getElementById('refreshCaptcha').addEventListener('click', refreshCaptcha);
+
         document.getElementById('regForm').onsubmit = async (e) => {
             e.preventDefault();
             const fd = new FormData(e.target);
+            const payload = { username: fd.get('username'), password: fd.get('password'), captcha: fd.get('captcha') };
             const res = await fetch('/api/register', {
                 method: 'POST',
                 credentials: 'include',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username: fd.get('username'), password: fd.get('password') })
+                body: JSON.stringify(payload)
             }).then(r => r.json());
             const msgEl = document.getElementById('msg');
             if (res.success) {
@@ -43,8 +59,13 @@
                 msgEl.textContent = res.msg || '注册失败';
                 msgEl.className = 'msg err';
                 msgEl.classList.remove('hidden');
+                // 刷新验证码以防重试时验证码已被消费
+                refreshCaptcha();
             }
         };
+
+        // 首次加载时请求一次验证码
+        refreshCaptcha();
     </script>
 </body>
 </html>
