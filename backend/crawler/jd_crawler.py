@@ -37,13 +37,13 @@ class JDCrawler():
         user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         options.add_argument(f'user-agent={user_agent}')
 
-        # 禁用图片加载和提示框以加快速度
-        prefs = {
-            "profile.managed_default_content_settings.images": 1,
-            "credentials_enable_service": False,
-            "profile.password_manager_enabled": False
-        }
-        options.add_experimental_option("prefs", prefs)
+        # 禁用图片加载可以加快速度，由于你需要截图看，暂时不禁用
+        # prefs = {
+        #     "profile.managed_default_content_settings.images": 2,
+        #     "credentials_enable_service": False,
+        #     "profile.password_manager_enabled": False
+        # }
+        # options.add_experimental_option("prefs", prefs)
 
         found_binary = False
         possible_chrome_paths = [
@@ -124,7 +124,7 @@ class JDCrawler():
 
         # 2. 访问搜索页
         self.driver.get(url)
-        time.sleep(3)  # 必须等待，太快会被拦截
+        time.sleep(5)  # 必须等待，太快会被拦截
 
         # 3. 检查是否被拦截到安全验证或登录页
         current_url = self.driver.current_url
@@ -134,7 +134,7 @@ class JDCrawler():
 
             for i in range(60, 0, -1):
                 if i % 10 == 0:
-                    print(f"    剩余 {i} 秒等���你手动操作...")
+                    print(f"    剩余 {i} 秒等待你手动操作...")
                 # 检查 URL 是否跳回了正常的搜索页
                 if "search.jd.com" in self.driver.current_url:
                     print("--> [✅ 验证/登录通过] 成功返回搜索页！")
@@ -151,44 +151,60 @@ class JDCrawler():
 
         # 4. 等待并解析数据
         try:
-            print("--> [DEBUG] 等待商品列表...")
-            WebDriverWait(self.driver, 15).until(
-                EC.presence_of_element_located((By.CLASS_NAME, 'gl-item'))
+            print("--> [DEBUG] 正在判断页面是否加载...")
+            # 只要页面中出现了 j-goods-list (商品列表容器)，就算加载成功
+            WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.ID, 'J_goodsList'))
             )
-
-            # 必须向下滚动触发图片和价格的 AJAX 加载
-            self.human_like_scroll()
-            time.sleep(2)
-
-            html = self.driver.page_source
-            return self._parse_jd_html(html, limit)
-
+            print("--> [DEBUG] 页面主容器已加载。")
         except Exception as e:
-            print("--> [ERROR] 商品加载失败！这通常是因为被盾了。")
-            ts = int(time.time())
-            try:
-                self.driver.save_screenshot(f"error_{ts}.png")
-                print(f"--> [INFO] 已保存错误截图: error_{ts}.png")
-            except:
-                pass
-            return []
+            print("--> [WARNING] 未能找到标准商品容器 J_goodsList，但尝试继续提取。")
+
+        # 必须向下滚动触发图片和价格的 AJAX 加载
+        print("--> [DEBUG] 正在滚动页面以加载价格信息...")
+        self.human_like_scroll()
+        time.sleep(2)
+
+        html = self.driver.page_source
+        return self._parse_jd_html(html, limit)
 
     def _parse_jd_html(self, html: str, limit: int) -> list:
         soup = BeautifulSoup(html, 'html.parser')
+
+        # 兼容两种常见的商品列表选择器
         items = soup.find_all('li', class_='gl-item')
+        if not items:
+            # 有时候页面结构变了，尝试寻找其他特征的列表项
+            items = soup.select('#J_goodsList ul li')
+
+        print(f"--> [DEBUG] 成功解析到 {len(items)} 个商品元素节点。")
+
         results = []
 
         for item in items[:limit]:
             try:
+                # 提取价格 (京东有时把价格放在 strong > i，有时在 div.p-price > strong > i)
                 price_tag = item.find('div', class_='p-price')
-                price_text = price_tag.find('i').text if price_tag and price_tag.find('i') else '0'
-                price = float(price_text) if price_text != '0' else 0.0
+                if price_tag and price_tag.find('i'):
+                    price_text = price_tag.find('i').text
+                else:
+                    price_text = '0'
 
+                # 处理可能带 '¥' 的情况
+                price_text = price_text.replace('￥', '').replace('¥', '').strip()
+                price = float(price_text) if price_text and price_text != '0' else 0.0
+
+                # 提取商品名称
                 name_tag = item.find('div', class_='p-name')
                 name = name_tag.find('em').text.strip() if name_tag else '未知商品'
 
-                link_tag = item.find('div', class_='p-img').find('a')
-                link = link_tag['href'] if link_tag else ''
+                # 提取链接
+                link_tag = item.find('div', class_='p-img')
+                if link_tag and link_tag.find('a'):
+                    link = link_tag.find('a')['href']
+                else:
+                    link = ''
+
                 if link and not link.startswith('http'):
                     link = 'https:' + link
 
@@ -199,6 +215,7 @@ class JDCrawler():
                     'source': 'jd'
                 })
             except Exception as e:
+                print(f"--> [WARNING] 解析单个商品出错: {e}")
                 continue
 
         return results
@@ -208,8 +225,11 @@ class JDCrawler():
             print("=== 开始真实爬取京东数据 ===")
             for keyword in self.CPU_KEYWORDS:
                 data_list = self.search_jd_real(keyword, limit=3)
+                if not data_list:
+                    print(f"--> [WARNING] 未能抓取到关于 {keyword} 的数据！")
+
                 for data in data_list:
-                    print(f"爬取到: {data['name']} - ￥{data['price']}")
+                    print(f"✅ 爬取成功: {data['name'][:30]}... | ￥{data['price']}")
                     cpu = CPU(
                         brand='Intel' if 'Intel' in keyword else 'AMD',
                         model=data['name'][:20],
@@ -220,6 +240,7 @@ class JDCrawler():
                         source='jd'
                     )
                     self.save_item(CPU, cpu.__dict__)
+
                 # 爬完一个关键词休息一下，防止被封 IP
                 time.sleep(random.uniform(3.0, 6.0))
 
