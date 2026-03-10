@@ -4,6 +4,7 @@ import time
 import os
 import sys
 import json
+import random
 from bs4 import BeautifulSoup
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -14,7 +15,7 @@ from urllib.parse import quote
 import undetected_chromedriver as uc
 
 from backend.crawler.base_crawler import BaseCrawler
-from backend.models import db, CPU  # 这里先以CPU为例测试，您可以引入其他硬件模型
+from backend.models import db, CPU
 
 
 class JDCrawler():
@@ -26,170 +27,153 @@ class JDCrawler():
         super().__init__()
         print("--> [DEBUG] JDCrawler 初始化开始")
 
-        # 配置 undetected_chromedriver 的 Options
         options = uc.ChromeOptions()
-        # 生产环境/不希望看到浏览器弹窗可以取消注释下面这行：
-        # options.add_argument('--headless')
+        # 禁用一些不必要的服务，减少被检测概率
         options.add_argument('--disable-gpu')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
 
-        # 禁用图片加载可以加快速度并减少被检测概率，但如果您需要截图排查请先注释掉
-        # prefs = {"profile.managed_default_content_settings.images": 2}
-        # options.add_experimental_option("prefs", prefs)
+        # 伪装 User-Agent (非常重要！)
+        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        options.add_argument(f'user-agent={user_agent}')
 
-        # 尝试寻找本地 chrome 安装路径 (undetected_chromedriver 通常能自己找到，找不到时才需要)
-        # 您可以根据实际情况保留或删除这段寻找逻辑
+        # 禁用图片加载和提示框以加快速度
+        prefs = {
+            "profile.managed_default_content_settings.images": 2,
+            "credentials_enable_service": False,
+            "profile.password_manager_enabled": False
+        }
+        options.add_experimental_option("prefs", prefs)
+
         found_binary = False
         possible_chrome_paths = [
             r"I:\ruanjian\Google\Chrome\Application\chrome.exe",
             r"C:\Program Files\Google\Chrome\Application\chrome.exe",
             r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-            r"D:\Program Files\Google\Chrome\Application\chrome.exe",
         ]
 
         for path in possible_chrome_paths:
             if os.path.exists(path):
-                print(f"--> [DEBUG] 找到浏览器程序: {path}")
                 options.binary_location = path
                 found_binary = True
                 break
 
-        if not found_binary:
-            print("--> [WARNING] 未能在常见路径找到 chrome.exe，undetected_chromedriver 将尝试自行寻找...")
-
         driver_path = r"I:\pycharm\PycharmProjects\biyesheji\chromedriver.exe"
-        if not os.path.exists(driver_path):
-            print(f"--> [ERROR] 找不到驱动文件！请确保已将 chromedriver.exe 放在: {driver_path}")
-            raise FileNotFoundError(f"找不到驱动文件: {driver_path}")
 
-        print(f"--> [DEBUG] 成功找到本地驱动: {driver_path}")
         print("--> [DEBUG] 正在启动 undetected_chromedriver ...")
-
         try:
-            # 关键修改：使用 uc.Chrome 初始化，并传入 driver_executable_path
-            self.driver = uc.Chrome(options=options, driver_executable_path=driver_path)
+            # 增加 version_main 参数，帮助 uc 更好地匹配你的 Chrome 版本
+            self.driver = uc.Chrome(
+                options=options,
+                driver_executable_path=driver_path,
+                version_main=120  # 假设你使用的是 Chrome 120，如果不对请根据实际情况修改
+            )
+            self.driver.implicitly_wait(10)
+
+            # 进一步隐藏 webdriver 特征
+            self.driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+                "source": """
+                    Object.defineProperty(navigator, 'webdriver', {
+                      get: () => undefined
+                    })
+                """
+            })
             print("--> [DEBUG] 浏览器启动成功！")
-
-            # 设置隐式等待，作为显式等待的补充
-            self.driver.implicitly_wait(5)
-
         except Exception as e:
-            print("\n" + "=" * 50)
-            print("❌ undetected_chromedriver 启动失败！")
-            print(f"报错信息:\n{e}")
-            print("=" * 50 + "\n")
+            print(f"❌ 浏览器启动失败: {e}")
             raise e
 
     def load_cookies(self):
-        """加载本地 Cookie"""
         cookie_path = 'jd_cookies.json'
         if os.path.exists(cookie_path):
-            with open(cookie_path, 'r', encoding='utf-8') as f:
-                cookies = json.load(f)
-                for cookie in cookies:
-                    # 过滤掉一些可能引起问题的字段
-                    if 'expiry' in cookie:
-                        del cookie['expiry']
-                    try:
+            try:
+                with open(cookie_path, 'r', encoding='utf-8') as f:
+                    cookies = json.load(f)
+                    for cookie in cookies:
+                        if 'expiry' in cookie:
+                            del cookie['expiry']
                         self.driver.add_cookie(cookie)
-                    except Exception as e:
-                        print(f"添加 Cookie 失败: {e}, cookie: {cookie}")
-            print("--> [INFO] 成功加载本地 Cookie！")
-            return True
+                return True
+            except Exception as e:
+                print(f"--> [ERROR] 加载 Cookie 失败: {e}")
         return False
 
     def save_cookies(self):
-        """保存当前 Cookie 到本地"""
         cookies = self.driver.get_cookies()
         with open('jd_cookies.json', 'w', encoding='utf-8') as f:
             json.dump(cookies, f)
-        print("--> [INFO] Cookie 已保存到本地 jd_cookies.json")
+        print("--> [INFO] Cookie 已保存")
+
+    def human_like_scroll(self):
+        """模拟真人滚动页面"""
+        total_height = int(self.driver.execute_script("return document.body.scrollHeight"))
+        for i in range(1, total_height, random.randint(200, 400)):
+            self.driver.execute_script(f"window.scrollTo(0, {i});")
+            time.sleep(random.uniform(0.1, 0.3))
 
     def search_jd_real(self, keyword: str, limit: int = 5) -> list:
-        """使用 Selenium 执行真实的京东搜索"""
-        print(f"正在京东真实爬取: {keyword}")
+        print(f"\n=== 开始抓取: {keyword} ===")
         url = f'https://search.jd.com/Search?keyword={quote(keyword)}&enc=utf-8'
 
-        # 先访问一次京东域名才能植入 cookie
-        print("--> [DEBUG] 正在访问京东主页植入 Cookie...")
+        # 1. 访问主页种下基础 Cookie
         self.driver.get('https://www.jd.com')
-
-        # 尝试加载 cookie 并刷新
+        time.sleep(2)
         if self.load_cookies():
-            print("--> [DEBUG] 刷新页面使 Cookie 生效...")
             self.driver.refresh()
-            time.sleep(2)  # 给页面一点加载时间
+            time.sleep(2)
 
-        print(f"--> [DEBUG] 准备跳转到搜索页: {url}")
+        # 2. 访问搜索页
         self.driver.get(url)
+        time.sleep(3)  # 必须等待，太快会被拦截
 
-        # 检查是否成功进入了搜索结果页，还是被拦截重定向了
+        # 3. 检查是否被拦截到安全验证或登录页
         current_url = self.driver.current_url
-        print(f"--> [DEBUG] 当前停留的 URL: {current_url}")
+        if "risk_handler" in current_url or "passport" in current_url:
+            print("--> [🛑 触发反爬] 被京东拦截到了安全验证或登录页！")
+            print("--> [👉 紧急操作] 请在自动打开的浏览器中，在 60 秒内完成验证或扫码登录！")
 
-        # 登录检测逻辑
-        if "passport" in current_url or "login" in current_url:
-            print("--> [🛑 触发反爬] 京东要求登录或 Cookie 已失效！")
-            print("--> [👉 操作提示] 请在弹出的浏览器窗口中，60秒内使用京东APP【扫码登录】...")
-
-            # 给用户 60 秒时间手动扫码
             for i in range(60, 0, -1):
                 if i % 10 == 0:
-                    print(f"    剩余 {i} 秒...")
-                if "passport" not in self.driver.current_url and "login" not in self.driver.current_url:
-                    print("--> [✅ 状态] 检测到网址变化，登录成功！")
-                    # 登录成功后，稍等一下再保存 cookie，确保完全写入
+                    print(f"    剩余 {i} 秒等���你手动操作...")
+                # 检查 URL 是否跳回了正常的搜索页
+                if "search.jd.com" in self.driver.current_url:
+                    print("--> [✅ 验证/登录通过] 成功返回搜索页！")
                     time.sleep(3)
                     self.save_cookies()
                     break
                 time.sleep(1)
 
-            if "passport" in self.driver.current_url or "login" in self.driver.current_url:
-                print("--> [⚠️ 超时] 似乎未完成登录，继续执行可能无法获取数据...")
-            else:
-                print("--> [DEBUG] 重新进入搜索页...")
-                self.driver.get(url)
+        # 再次确保我们在正确的搜索页上
+        if "search.jd.com" not in self.driver.current_url:
+            print("--> [⚠️ 警告] 依然未能进入搜索页，尝试强制重新加载...")
+            self.driver.get(url)
+            time.sleep(3)
 
-        # ---------------- 核心排查修改点 ----------------
-        # 等待商品列表加载出来，时间延长到 15 秒
+        # 4. 等待并解析数据
         try:
-            print("--> [DEBUG] 正在等待商品列表加载 (gl-item)...")
+            print("--> [DEBUG] 等待商品列表...")
             WebDriverWait(self.driver, 15).until(
                 EC.presence_of_element_located((By.CLASS_NAME, 'gl-item'))
             )
-            print("--> [DEBUG] 商品列表加载成功！")
+
+            # 必须向下滚动触发图片和价格的 AJAX 加载
+            self.human_like_scroll()
+            time.sleep(2)
+
+            html = self.driver.page_source
+            return self._parse_jd_html(html, limit)
+
         except Exception as e:
-            print(f"--> [ERROR] 等待商品列表加载失败！")
-
-            # 保存失败时的现场证据（截图和 HTML）
-            timestamp = int(time.time())
-            error_img = f"error_screenshot_{timestamp}.png"
-            error_html = f"error_page_{timestamp}.html"
-
+            print("--> [ERROR] 商品加载失败！这通常是因为被盾了。")
+            ts = int(time.time())
             try:
-                self.driver.save_screenshot(error_img)
-                with open(error_html, "w", encoding="utf-8") as f:
-                    f.write(self.driver.page_source)
-                print(f"--> 📸 已将出错页面截图保存为: {error_img}")
-                print(f"--> 📄 已将出错页面源码保存为: {error_html}")
-                print("--> 【排查建议】：请去项目文件夹里打开那张 PNG 图片，看看京东当时是不是弹出了验证码或需要登录！")
-            except Exception as e2:
-                print(f"--> 保存错误现场失败: {e2}")
-
+                self.driver.save_screenshot(f"error_{ts}.png")
+                print(f"--> [INFO] 已保存错误截图: error_{ts}.png")
+            except:
+                pass
             return []
-        # ------------------------------------------------
-
-        # 稍微往下滚动，触发图片和价格动态加载
-        print("--> [DEBUG] 滚动页面以加载动态内容...")
-        self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight/2);")
-        time.sleep(2)
-
-        html = self.driver.page_source
-        return self._parse_jd_html(html, limit)
 
     def _parse_jd_html(self, html: str, limit: int) -> list:
-        """解析抓取回来的 HTML 内容"""
         soup = BeautifulSoup(html, 'html.parser')
         items = soup.find_all('li', class_='gl-item')
         results = []
@@ -215,13 +199,11 @@ class JDCrawler():
                     'source': 'jd'
                 })
             except Exception as e:
-                print(f"解析单个商品出错: {e}")
                 continue
 
         return results
 
     def crawl_all(self, app):
-        """执行全量爬取并入库"""
         with app.app_context():
             print("=== 开始真实爬取京东数据 ===")
             for keyword in self.CPU_KEYWORDS:
@@ -238,14 +220,18 @@ class JDCrawler():
                         source='jd'
                     )
                     self.save_item(CPU, cpu.__dict__)
+                # 爬完一个关键词休息一下，防止被封 IP
+                time.sleep(random.uniform(3.0, 6.0))
+
             print("=== 真实爬取完成 ===")
 
-            # 为了确保有时间看到最后的页面状态，可以稍微停顿一下
-            # time.sleep(5)
+        try:
             self.driver.quit()
+        except OSError:
+            # 捕获 uc 常见的 [WinError 6] 句柄无效的错误，静默处理
+            pass
 
     def save_item(self, model_class, item_data: dict):
-        """保存单条数据"""
         try:
             item_data.pop('_sa_instance_state', None)
             obj = model_class(**item_data)
@@ -253,4 +239,3 @@ class JDCrawler():
             db.session.commit()
         except Exception as e:
             db.session.rollback()
-            print(f"保存失败: {e}")
