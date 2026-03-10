@@ -10,6 +10,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import SessionNotCreatedException  # 新增导入异常
 from webdriver_manager.chrome import ChromeDriverManager
 from urllib.parse import quote
 
@@ -82,8 +83,7 @@ class JDCrawler():
                 ).install()
                 print(f"--> [DEBUG] 自动下载驱动成功: {driver_path}")
             except Exception as e:
-                print(f"--> [ERROR] 驱动下载失败: {e}")
-                # 不再抛出异常，继续往下走看看能不能通过某种神奇方式运行，或者最终在下面报错
+                print(f"--> [WARNING] 自动下载失败，稍后尝试本地查找或报错... ({e})")
 
         # 3. 最终检查
         if not driver_path:
@@ -95,14 +95,46 @@ class JDCrawler():
             raise FileNotFoundError("没有找到 chromedriver.exe")
 
         print("--> [DEBUG] 正在启动浏览器进程...")
-        self.driver = webdriver.Chrome(service=Service(driver_path), options=chrome_options)
-        print("--> [DEBUG] 浏览器启动成功！")
+        try:
+            self.driver = webdriver.Chrome(service=Service(driver_path), options=chrome_options)
+            print("--> [DEBUG] 浏览器启动成功！")
+        except SessionNotCreatedException as e:
+            print("\n" + "="*50)
+            print("❌ 启动失败：浏览器与驱动版本不匹配！")
+            print(f"您的浏览器版本可能过新或过旧。Selenium 报错信息:\n{e.msg}")
+            print("💡 解决方法：请运行项目中的 [download_driver.py] 脚本，它会自动下载匹配您版本的驱动。")
+            print("="*50 + "\n")
+            raise e
 
     def search_jd_real(self, keyword: str, limit: int = 5) -> list:
         """使用 Selenium 执行真实的京东搜索"""
         print(f"正在京东真实爬取: {keyword}")
         url = f'https://search.jd.com/Search?keyword={quote(keyword)}&enc=utf-8'
         self.driver.get(url)
+
+        # --- 新增：登录检测逻辑 ---
+        # 如果跳转到了 passport.jd.com，说明必须登录才能看
+        if "passport" in self.driver.current_url:
+            print("--> [🛑 触发反爬] 京东要求登录！")
+            print("--> [👉 操作提示] 请在弹出的浏览器窗口中，30秒内使用京东APP【扫码登录】...")
+            
+            # 给用户 30 秒时间手动扫码
+            for i in range(30, 0, -1):
+                if i % 5 == 0:
+                    print(f"    剩余 {i} 秒...")
+                if "passport" not in self.driver.current_url:
+                    print("--> [✅ 状态] 检测到网址变化，登录可能成功！")
+                    break
+                time.sleep(1)
+            
+            # 如果还在登录页，尝试强制刷新回搜索页试试
+            if "passport" in self.driver.current_url:
+                print("--> [⚠️ 超时] 似乎未完成登录，尝试强制重新进入搜索页...")
+                self.driver.get(url)
+            else:
+                print("--> [INFO] 登录成功，继续执行搜索...")
+                self.driver.get(url) # 重新加载一次搜索页确保数据正确
+        # -----------------------
 
         # 等待页面中的商品列表元素加载出来，最长等待 10 秒
         try:

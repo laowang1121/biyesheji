@@ -34,3 +34,7 @@ if __name__ == '__main__':
             print(f"运行出错: {e}")
             print("=== 错误详情 ===")
             traceback.print_exc()
+            
+            # 如果是驱动问题，给出明确提示
+            if "SessionNotCreatedException" in str(e) or "executable needs to be in PATH" in str(e):
+                print("\n💡 提示：请尝试先运行 download_driver.py 更新驱动。")
