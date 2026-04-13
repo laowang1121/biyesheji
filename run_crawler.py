@@ -15,7 +15,7 @@ os.environ['HTTPS_PROXY'] = ''
 sys.path.insert(0, '.')
 
 from app import app
-from backend.crawler.jd_crawler import JDCrawler
+
 
 if __name__ == '__main__':
     with app.app_context():

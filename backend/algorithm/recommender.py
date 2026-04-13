@@ -1,25 +1,13 @@
 # -*- coding: utf-8 -*-
 """配置推荐算法 - 根据预算和场景分配并匹配最优配件"""
-from backend.models import (
-    db, CPU, Motherboard, GPU, Memory, SSD, Cooling, Case, PSU
-)
+import os
+import sqlite3
 from config import Config
+from backend.algorithm.ai_recommender import search_components
 
 
 class ConfigRecommender:
     """配置推荐器"""
-    
-    # 配件类型与模型映射
-    COMPONENT_MAP = {
-        'cpu': CPU,
-        'motherboard': Motherboard,
-        'gpu': GPU,
-        'memory': Memory,
-        'ssd': SSD,
-        'cooling': Cooling,
-        'case': Case,
-        'psu': PSU,
-    }
     
     # 默认预算分配（取区间中值）
     DEFAULT_OFFICE = {
@@ -56,7 +44,20 @@ class ConfigRecommender:
         """获取某配件的预算"""
         ratio = self.allocation.get(component, 0) / 100
         return round(self.budget * ratio, 2)
-    
+
+    def _map_to_table(self, comp: str) -> str:
+        mapping = {
+            'cpu': 'cpu_analyzed',
+            'motherboard': '主板_analyzed',
+            'gpu': '显卡_analyzed',
+            'memory': '内存条_analyzed',
+            'ssd': '固态_analyzed',
+            'cooling': '散热_analyzed',
+            'case': '机箱_analyzed',
+            'psu': '电源_analyzed'
+        }
+        return mapping.get(comp, f"{comp}_analyzed")
+
     def recommend(self) -> dict:
         """
         执行推荐，返回各配件的最优选择
@@ -74,21 +75,22 @@ class ConfigRecommender:
         components_selected = {}
         total_price = 0
 
+        components_list = ['cpu', 'motherboard', 'gpu', 'memory', 'ssd', 'cooling', 'case', 'psu']
+
         # 初始选择：基础预算内选择最强配置
-        for component, Model in self.COMPONENT_MAP.items():
+        for component in components_list:
             budget = self.get_component_budget(component)
-            
-            # 初始查询严格控制在预算内
-            query = Model.query.filter(Model.price <= budget)
-            item = query.order_by(Model.price.desc()).first()
-            
-            if not item:
+            table_name = self._map_to_table(component)
+
+            parts = search_components(table_name, max_price=budget, limit=1, desc=True)
+            if not parts:
                 # 若无符合的，选最便宜的
-                item = Model.query.order_by(Model.price.asc()).first()
-            
-            if item:
+                parts = search_components(table_name, limit=1, desc=False)
+
+            if parts:
+                item = parts[0]
                 components_selected[component] = item
-                total_price += item.price
+                total_price += float(item.get('价格', item.get('商品价格', 0)))
 
         # 调整逻辑限制预算不超100%，不少于90%
         upgrade_priority = ['gpu', 'cpu', 'ssd', 'memory', 'motherboard', 'cooling', 'case', 'psu']
@@ -103,19 +105,21 @@ class ConfigRecommender:
             for comp in downgrade_priority:
                 if comp not in components_selected: continue
                 current_item = components_selected[comp]
-                Model = self.COMPONENT_MAP[comp]
+                curr_price = float(current_item.get('价格', current_item.get('商品价格', 0)))
+                table_name = self._map_to_table(comp)
 
-                target_max_price = current_item.price - (total_price - self.budget)
+                target_max_price = curr_price - (total_price - self.budget)
                 if target_max_price <= 0:
-                    next_item = Model.query.filter(Model.price < current_item.price).order_by(Model.price.desc()).first()
+                    next_items = search_components(table_name, max_price=curr_price-0.01, limit=1, desc=True)
                 else:
-                    next_item = Model.query.filter(Model.price <= target_max_price).order_by(Model.price.desc()).first()
-                    if not next_item:
-                        next_item = Model.query.filter(Model.price < current_item.price).order_by(Model.price.desc()).first()
+                    next_items = search_components(table_name, max_price=target_max_price, limit=1, desc=True)
+                    if not next_items:
+                        next_items = search_components(table_name, max_price=curr_price-0.01, limit=1, desc=True)
 
-                if next_item:
-                    total_price = total_price - current_item.price + next_item.price
-                    components_selected[comp] = next_item
+                if next_items:
+                    next_price = float(next_items[0].get('价格', next_items[0].get('商品价格', 0)))
+                    total_price = total_price - curr_price + next_price
+                    components_selected[comp] = next_items[0]
                     downgraded = True
                     break
             if not downgraded:
@@ -129,30 +133,58 @@ class ConfigRecommender:
             for comp in upgrade_priority:
                 if comp not in components_selected: continue
                 current_item = components_selected[comp]
-                Model = self.COMPONENT_MAP[comp]
+                curr_price = float(current_item.get('价格', current_item.get('商品价格', 0)))
+                table_name = self._map_to_table(comp)
 
                 remaining_budget = self.budget - total_price
-                max_allowed_price = current_item.price + remaining_budget
+                max_allowed_price = curr_price + remaining_budget
 
-                # 寻找更贵的但仍在剩余预算内的配件，选最贵的
-                next_item = Model.query.filter(Model.price > current_item.price, Model.price <= max_allowed_price).order_by(Model.price.desc()).first()
+                db_path = os.path.join(Config.BASE_DIR, 'data', 'ai_analyzed.db')
+                conn = sqlite3.connect(db_path)
+                conn.row_factory = sqlite3.Row
+                cur = conn.cursor()
 
-                if next_item:
-                    total_price = total_price - current_item.price + next_item.price
+                cur.execute(f"PRAGMA table_info({table_name})")
+                cols = [c['name'] for c in cur.fetchall()]
+                price_col = '商品价格' if '商品价格' in cols else '价格'
+
+                cur.execute(f"SELECT * FROM {table_name} WHERE CAST({price_col} AS REAL) > ? AND CAST({price_col} AS REAL) <= ? ORDER BY CAST({price_col} AS REAL) DESC LIMIT 1", (curr_price, max_allowed_price))
+                row = cur.fetchone()
+                conn.close()
+
+                if row:
+                    next_item = dict(row)
+                    next_price = float(next_item.get('价格', next_item.get('商品价格', 0)))
+                    total_price = total_price - curr_price + next_price
                     components_selected[comp] = next_item
                     upgraded = True
                     break
 
             if not upgraded:
-                # 常规升级卡住，说明任何升级都导致超出预算。采取"强制升级"再降级其它配件策略
+                # 常规升级卡住，强制升级再降级
                 for comp in upgrade_priority:
                     if comp not in components_selected: continue
                     current_item = components_selected[comp]
-                    Model = self.COMPONENT_MAP[comp]
-                    next_item = Model.query.filter(Model.price > current_item.price).order_by(Model.price.asc()).first()
+                    curr_price = float(current_item.get('价格', current_item.get('商品价格', 0)))
+                    table_name = self._map_to_table(comp)
 
-                    if next_item:
-                        total_price = total_price - current_item.price + next_item.price
+                    db_path = os.path.join(Config.BASE_DIR, 'data', 'ai_analyzed.db')
+                    conn = sqlite3.connect(db_path)
+                    conn.row_factory = sqlite3.Row
+                    cur = conn.cursor()
+
+                    cur.execute(f"PRAGMA table_info({table_name})")
+                    cols = [c['name'] for c in cur.fetchall()]
+                    price_col = '商品价格' if '商品价格' in cols else '价格'
+
+                    cur.execute(f"SELECT * FROM {table_name} WHERE CAST({price_col} AS REAL) > ? ORDER BY CAST({price_col} AS REAL) ASC LIMIT 1", (curr_price,))
+                    row = cur.fetchone()
+                    conn.close()
+
+                    if row:
+                        next_item = dict(row)
+                        next_price = float(next_item.get('价格', next_item.get('商品价格', 0)))
+                        total_price = total_price - curr_price + next_price
                         components_selected[comp] = next_item
                         upgraded = True
 
@@ -161,36 +193,41 @@ class ConfigRecommender:
                             if total_price <= self.budget: break
                             if d_comp not in components_selected or d_comp == comp: continue
                             d_item = components_selected[d_comp]
-                            d_Model = self.COMPONENT_MAP[d_comp]
+                            d_price = float(d_item.get('价格', d_item.get('商品价格', 0)))
+                            d_table = self._map_to_table(d_comp)
 
-                            target = d_item.price - (total_price - self.budget)
+                            target = d_price - (total_price - self.budget)
                             if target <= 0:
-                                lower_item = d_Model.query.filter(d_Model.price < d_item.price).order_by(d_Model.price.desc()).first()
+                                lower_items = search_components(d_table, max_price=d_price-0.01, limit=1, desc=True)
                             else:
-                                lower_item = d_Model.query.filter(d_Model.price <= target).order_by(d_Model.price.desc()).first()
-                                if not lower_item:
-                                    lower_item = d_Model.query.filter(d_Model.price < d_item.price).order_by(d_Model.price.desc()).first()
+                                lower_items = search_components(d_table, max_price=target, limit=1, desc=True)
+                                if not lower_items:
+                                    lower_items = search_components(d_table, max_price=d_price-0.01, limit=1, desc=True)
 
-                            if lower_item:
-                                total_price = total_price - d_item.price + lower_item.price
-                                components_selected[d_comp] = lower_item
+                            if lower_items:
+                                lower_price = float(lower_items[0].get('价格', lower_items[0].get('商品价格', 0)))
+                                total_price = total_price - d_price + lower_price
+                                components_selected[d_comp] = lower_items[0]
                         break
 
             if not upgraded:
                 break
             iters += 1
 
-        # 确保总价不会因为强制降级而再次超出100%，如果有，再最后粗暴处理一次
+        # 确保总价不会因为强制降级而再次超出100%
         if total_price > self.budget:
             for comp in downgrade_priority:
                 if total_price <= self.budget: break
                 if comp not in components_selected: continue
                 current_item = components_selected[comp]
-                Model = self.COMPONENT_MAP[comp]
-                lower_item = Model.query.filter(Model.price < current_item.price).order_by(Model.price.desc()).first()
-                if lower_item:
-                    total_price = total_price - current_item.price + lower_item.price
-                    components_selected[comp] = lower_item
+                curr_price = float(current_item.get('价格', current_item.get('商品价格', 0)))
+                table_name = self._map_to_table(comp)
+
+                lower_items = search_components(table_name, max_price=curr_price-0.01, limit=1, desc=True)
+                if lower_items:
+                    lower_price = float(lower_items[0].get('价格', lower_items[0].get('商品价格', 0)))
+                    total_price = total_price - curr_price + lower_price
+                    components_selected[comp] = lower_items[0]
 
         # 装配结果
         for component, item in components_selected.items():
@@ -199,37 +236,43 @@ class ConfigRecommender:
             comp_data['allocated_budget'] = budget
             result['components'][component] = comp_data
             result['summary'].append({
-                'name': comp_data.get('model', comp_data.get('model', '')),
-                'price': item.price,
-                'link': item.link
+                'name': comp_data.get('brand', comp_data.get('model', '未知')),
+                'price': comp_data.get('price', 0),
+                'link': comp_data.get('link', '')
             })
 
         result['total_price'] = round(total_price, 2)
         result['budget_usage'] = round(result['total_price'] / self.budget * 100, 1)
-        
+
         return result
-    
-    def _model_to_dict(self, obj, component_type: str) -> dict:
-        """将模型对象转为字典"""
-        d = {
-            'id': obj.id,
-            'brand': obj.brand,
-            'model': obj.model,
-            'price': obj.price,
-            'link': obj.link,
-            'source': obj.source,
+
+    def _model_to_dict(self, obj: dict, component_type: str) -> dict:
+        """将数据字典转换为前端需要的格式"""
+        brand = ''
+        if component_type == 'cpu' and obj.get('型号'):
+            brand = obj.get('型号')
+        else:
+            brand = obj.get('商品名称', obj.get('商品名字', obj.get('品牌（含具体型号）', obj.get('型号', obj.get('主板型号', obj.get('品牌', '未知配件'))))))
+
+        if component_type == 'memory' and isinstance(brand, str):
+            if ' - ' in brand:
+                brand = brand.split(' - ')[-1].strip()
+            words = brand.split()
+            half = len(words) // 2
+            if half > 0 and words[:half] == words[half:]:
+                brand = ' '.join(words[:half])
+
+        link = obj.get('链接', obj.get('item_url', ''))
+        price = float(obj.get('价格', obj.get('商品价格', 0)))
+
+        return {
+            'brand': brand,
+            'model': brand,  # 兼容前端取 `model || brand`
+            'price': price,
+            'link': link,
+            'raw': obj
         }
-        # 添加类型特定字段
-        if hasattr(obj, 'series'):
-            d['series'] = obj.series
-        if hasattr(obj, 'type'):
-            d['type'] = obj.type
-        if hasattr(obj, 'capacity'):
-            d['capacity'] = obj.capacity
-        if hasattr(obj, 'wattage'):
-            d['wattage'] = obj.wattage
-        return d
-    
+
     @staticmethod
     def validate_custom_allocation(allocation: dict):
         """

@@ -84,8 +84,8 @@ class BaseCrawler:
         samples = [
             # CPU - 多价位覆盖
             (CPU, [
-                {'brand': 'AMD', 'model': '锐龙5 5600', 'series': '锐龙5000', 'package_type': '盒装', 'price': 899, 'link': 'https://item.jd.com/example', 'source': 'jd'},
-                {'brand': 'Intel', 'model': '酷睿i5-12400F', 'series': '酷睿12代', 'package_type': '散片', 'price': 849, 'link': 'https://item.jd.com/example', 'source': 'jd'},
+                {'brand': 'AMD', 'model': '锐龙5 5600', 'series': '锐龙5000', 'package_type': '盒装', 'price': 755, 'link': 'https://e.tb.cn/h.inoAsd0rHaCOgoe?tk=wbMi5UiFk7A CZ057', 'source': 'jd'},
+                {'brand': 'Intel', 'model': '酷睿i5-12400F', 'series': '酷睿12代', 'package_type': '散片', 'price': 879, 'link': 'https://e.tb.cn/h.iM58tccc2ua73Kw?tk=57J05UitoDt CZ057', 'source': 'tb'},
                 {'brand': 'AMD', 'model': '锐龙5 5600G', 'series': '锐龙5000', 'package_type': '盒装', 'price': 699, 'link': 'https://item.jd.com/example', 'source': 'jd'},
                 {'brand': 'AMD', 'model': '锐龙7 7800X3D', 'series': '锐龙7000', 'package_type': '盒装', 'price': 2499, 'link': 'https://item.jd.com/example', 'source': 'jd'},
                 {'brand': 'Intel', 'model': '酷睿i7-13700K', 'series': '酷睿13代', 'package_type': '盒装', 'price': 2299, 'link': 'https://item.jd.com/example', 'source': 'jd'},

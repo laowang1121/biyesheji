@@ -22,6 +22,11 @@
                     <h2>配置推荐</h2>
                     <p style="color: var(--text-muted); margin-bottom: 1rem;">请输入您的预算，系统将根据使用场景为您推荐最优配置。</p>
                     <div class="input-row">
+                        <input type="text" id="aiPrompt" placeholder="或者直接输入需求：如给我一套3000块的游戏电脑" style="flex:2;">
+                        <button class="btn btn-primary" id="btnAIRecommend">AI智能推荐</button>
+                    </div>
+                    <div style="text-align: center; margin: 10px 0; color: var(--text-muted);">--- 或者使用经典模式 ---</div>
+                    <div class="input-row">
                         <input type="number" id="budget" placeholder="预算金额（元）" value="5000" min="1000" max="100000" step="100">
                         <select id="mode">
                             <option value="office">办公模式</option>
@@ -113,17 +118,66 @@
             const el = document.getElementById('result');
             if (res.success) {
                 const d = res.data;
-                let html = '<h3>推荐配置</h3>';
+                let html = '<h3>推荐配置</h3><div class="results-grid">';
                 for (const [k, v] of Object.entries(d.components || {})) {
                     const names = { cpu:'CPU', gpu:'显卡', motherboard:'主板', memory:'内存', ssd:'固态', cooling:'散热', case:'机箱', psu:'电源' };
-                    html += `<div class="result-item"><span>${names[k] || k}: ${v.model || v.brand}</span><span>¥${v.price}</span>${v.link ? `<a href="${v.link}" target="_blank">购买</a>` : ''}</div>`;
+                    let paramsHtml = '';
+                    for (const [pk, pv] of Object.entries(v.raw || {})) {
+                        if (['id', '链接', 'item_url', '价格'].includes(pk) || !pv) continue;
+                        paramsHtml += `<span class="param-badge">${pk}: ${pv}</span>`;
+                    }
+                    html += `
+                    <div class="result-card">
+                        <div class="comp-title">${names[k] || k}: ${v.brand || v.model || '未知'}</div>
+                        <div class="comp-params">${paramsHtml}</div>
+                        <div class="comp-footer">
+                            <span class="comp-price">¥${parseFloat(v.price).toFixed(2)}</span>
+                            ${v.link ? `<a href="${v.link}" target="_blank" class="comp-link">购买</a>` : ''}
+                        </div>
+                    </div>`;
                 }
-                html += `<div class="result-total">总价: ¥${d.total_price} (预算使用率 ${d.budget_usage}%)</div>`;
+                html += `</div><div class="result-total" style="font-size:1.2rem;margin-top:20px;">总价: ¥${d.total_price} (预算使用率 ${d.budget_usage}%)</div>`;
                 el.innerHTML = html;
                 el.classList.remove('hidden');
             } else {
                 el.innerHTML = '<p style="color: var(--danger);">' + (res.msg || '获取失败') + '</p>';
                 el.classList.remove('hidden');
+            }
+        };
+
+        // AI推荐
+        document.getElementById('btnAIRecommend').onclick = async () => {
+            const prompt = document.getElementById('aiPrompt').value;
+            if (!prompt) return alert('请输入需求');
+            const el = document.getElementById('result');
+            el.innerHTML = '<p>AI正在思考并查询 ai_analyzed.db，请稍候...</p>';
+            el.classList.remove('hidden');
+
+            const res = await api('/api/recommend/ai', { method: 'POST', body: JSON.stringify({ prompt }) });
+            if (res.success) {
+                const d = res.data;
+                let html = `<h3>AI 智能推荐结果</h3><p style="color: var(--accent); margin-bottom: 10px;">${d.ai_message}</p><div class="results-grid">`;
+                for (const [k, v] of Object.entries(d.components || {})) {
+                    const names = { cpu:'CPU', gpu:'显卡', motherboard:'主板', memory:'内存', ssd:'固态', cooling:'散热', case:'机箱', psu:'电源' };
+                    let paramsHtml = '';
+                    for (const [pk, pv] of Object.entries(v.raw || {})) {
+                        if (['id', '链接', 'item_url', '价格'].includes(pk) || !pv) continue;
+                        paramsHtml += `<span class="param-badge">${pk}: ${pv}</span>`;
+                    }
+                    html += `
+                    <div class="result-card">
+                        <div class="comp-title">${names[k] || k}: ${v.brand || v.model || '未知'}</div>
+                        <div class="comp-params">${paramsHtml}</div>
+                        <div class="comp-footer">
+                            <span class="comp-price">¥${parseFloat(v.price).toFixed(2)}</span>
+                            ${v.link ? `<a href="${v.link}" target="_blank" class="comp-link">购买</a>` : ''}
+                        </div>
+                    </div>`;
+                }
+                html += `</div><div class="result-total" style="font-size:1.2rem;margin-top:20px;">总价: ¥${d.total_price} (预算使用率 ${d.budget_usage}%)</div>`;
+                el.innerHTML = html;
+            } else {
+                el.innerHTML = '<p style="color: var(--danger);">' + (res.msg || '获取失败') + '</p>';
             }
         };
 

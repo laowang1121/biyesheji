@@ -134,17 +134,53 @@ def update_bug_status(bid):
 @admin_required
 def list_components(component):
     """获取某类配件列表"""
-    Model = COMPONENT_MODELS.get(component)
-    if not Model:
+    import sqlite3
+    import os
+    from config import Config
+
+    table_map = {
+        'cpu': 'cpu_analyzed', 'motherboard': '主板_analyzed', 'gpu': '显卡_analyzed',
+        'memory': '内存条_analyzed', 'ssd': '固态_analyzed', 'cooling': '散热_analyzed',
+        'case': '机箱_analyzed', 'psu': '电源_analyzed'
+    }
+    table_name = table_map.get(component)
+    if not table_name:
         return jsonify({'success': False, 'msg': '未知配件类型'}), 400
-    
-    items = Model.query.order_by(Model.price.asc()).limit(100).all()
-    cols = [c.key for c in Model.__table__.columns if c.key not in ('id', 'created_at')]
-    
-    return jsonify({
-        'success': True,
-        'data': [{k: getattr(i, k) for k in cols} | {'id': i.id} for i in items]
-    })
+
+    db_path = os.path.join(Config.BASE_DIR, 'data', 'ai_analyzed.db')
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+
+    try:
+        cur.execute(f"PRAGMA table_info({table_name})")
+        cols = [c['name'] for c in cur.fetchall() if c['name'] != 'id']
+
+        price_col = '商品价格' if '商品价格' in cols else '价格'
+
+        cur.execute(f"SELECT * FROM {table_name} ORDER BY CAST({price_col} AS REAL) ASC LIMIT 100")
+        rows = cur.fetchall()
+
+        data = []
+        for row in rows:
+            item = {'id': row['id']}
+            for col in cols:
+                val = row[col]
+                if component == 'memory' and col == '商品名称' and isinstance(val, str):
+                    if ' - ' in val:
+                        val = val.split(' - ')[-1].strip()
+                    words = val.split()
+                    half = len(words) // 2
+                    if half > 0 and words[:half] == words[half:]:
+                        val = ' '.join(words[:half])
+                item[col] = val
+            data.append(item)
+
+        return jsonify({'success': True, 'data': data})
+    except Exception as e:
+        return jsonify({'success': False, 'msg': str(e)}), 500
+    finally:
+        conn.close()
 
 
 @api_bp.route('/admin/components/<component>', methods=['POST'])
@@ -152,23 +188,51 @@ def list_components(component):
 @admin_required
 def add_component(component):
     """添加配件"""
-    Model = COMPONENT_MODELS.get(component)
-    if not Model:
+    import sqlite3
+    import os
+    from config import Config
+    table_map = {
+        'cpu': 'cpu_analyzed', 'motherboard': '主板_analyzed', 'gpu': '显卡_analyzed',
+        'memory': '内存条_analyzed', 'ssd': '固态_analyzed', 'cooling': '散热_analyzed',
+        'case': '机箱_analyzed', 'psu': '电源_analyzed'
+    }
+    table_name = table_map.get(component)
+    if not table_name:
         return jsonify({'success': False, 'msg': '未知配件类型'}), 400
-    
+
     data = request.get_json()
-    required = {'brand', 'model', 'price'}
-    if not required.issubset(data.keys()):
-        return jsonify({'success': False, 'msg': f'缺少必填字段: {required - set(data.keys())}'}), 400
-    
-    # 过滤有效字段
-    valid_cols = {c.key for c in Model.__table__.columns if c.key != 'id'}
-    item_data = {k: v for k, v in data.items() if k in valid_cols}
-    
-    obj = Model(**item_data)
-    db.session.add(obj)
-    db.session.commit()
-    return jsonify({'success': True, 'msg': '添加成功', 'id': obj.id})
+    if not data:
+        return jsonify({'success': False, 'msg': '无数据'}), 400
+
+    db_path = os.path.join(Config.BASE_DIR, 'data', 'ai_analyzed.db')
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+
+    try:
+        cur.execute(f"PRAGMA table_info({table_name})")
+        valid_cols = [c[1] for c in cur.fetchall() if c[1] != 'id']
+
+        keys = []
+        values = []
+        placeholders = []
+        for k, v in data.items():
+            if k in valid_cols:
+                keys.append(f"[{k}]")
+                values.append(v)
+                placeholders.append('?')
+
+        if not keys:
+            return jsonify({'success': False, 'msg': '没有有效字段'}), 400
+
+        sql = f"INSERT INTO {table_name} ({','.join(keys)}) VALUES ({','.join(placeholders)})"
+        cur.execute(sql, tuple(values))
+        conn.commit()
+        return jsonify({'success': True, 'msg': '添加成功', 'id': cur.lastrowid})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'success': False, 'msg': str(e)}), 500
+    finally:
+        conn.close()
 
 
 @api_bp.route('/admin/components/<component>/<int:cid>', methods=['PUT'])
@@ -176,20 +240,47 @@ def add_component(component):
 @admin_required
 def update_component(component, cid):
     """更新配件"""
-    Model = COMPONENT_MODELS.get(component)
-    if not Model:
+    import sqlite3
+    import os
+    from config import Config
+    table_map = {
+        'cpu': 'cpu_analyzed', 'motherboard': '主板_analyzed', 'gpu': '显卡_analyzed',
+        'memory': '内存条_analyzed', 'ssd': '固态_analyzed', 'cooling': '散热_analyzed',
+        'case': '机箱_analyzed', 'psu': '电源_analyzed'
+    }
+    table_name = table_map.get(component)
+    if not table_name:
         return jsonify({'success': False, 'msg': '未知配件类型'}), 400
-    
-    obj = Model.query.get_or_404(cid)
+
     data = request.get_json()
-    valid_cols = {c.key for c in Model.__table__.columns if c.key not in ('id',)}
-    
-    for k, v in data.items():
-        if k in valid_cols and hasattr(obj, k):
-            setattr(obj, k, v)
-    
-    db.session.commit()
-    return jsonify({'success': True, 'msg': '更新成功'})
+    db_path = os.path.join(Config.BASE_DIR, 'data', 'ai_analyzed.db')
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+
+    try:
+        cur.execute(f"PRAGMA table_info({table_name})")
+        valid_cols = [c[1] for c in cur.fetchall() if c[1] != 'id']
+
+        set_clause = []
+        values = []
+        for k, v in data.items():
+            if k in valid_cols:
+                set_clause.append(f"[{k}]=?")
+                values.append(v)
+
+        if not set_clause:
+            return jsonify({'success': True, 'msg': '无更新内容'})
+
+        values.append(cid)
+        sql = f"UPDATE {table_name} SET {','.join(set_clause)} WHERE id=?"
+        cur.execute(sql, tuple(values))
+        conn.commit()
+        return jsonify({'success': True, 'msg': '更新成功'})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'success': False, 'msg': str(e)}), 500
+    finally:
+        conn.close()
 
 
 @api_bp.route('/admin/components/<component>/<int:cid>', methods=['DELETE'])
@@ -197,11 +288,27 @@ def update_component(component, cid):
 @admin_required
 def delete_component(component, cid):
     """删除配件"""
-    Model = COMPONENT_MODELS.get(component)
-    if not Model:
+    import sqlite3
+    import os
+    from config import Config
+    table_map = {
+        'cpu': 'cpu_analyzed', 'motherboard': '主板_analyzed', 'gpu': '显卡_analyzed',
+        'memory': '内存条_analyzed', 'ssd': '固态_analyzed', 'cooling': '散热_analyzed',
+        'case': '机箱_analyzed', 'psu': '电源_analyzed'
+    }
+    table_name = table_map.get(component)
+    if not table_name:
         return jsonify({'success': False, 'msg': '未知配件类型'}), 400
-    
-    obj = Model.query.get_or_404(cid)
-    db.session.delete(obj)
-    db.session.commit()
-    return jsonify({'success': True, 'msg': '删除成功'})
+
+    db_path = os.path.join(Config.BASE_DIR, 'data', 'ai_analyzed.db')
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute(f"DELETE FROM {table_name} WHERE id=?", (cid,))
+        conn.commit()
+        return jsonify({'success': True, 'msg': '删除成功'})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'success': False, 'msg': str(e)}), 500
+    finally:
+        conn.close()

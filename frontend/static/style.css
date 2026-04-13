@@ -128,7 +128,7 @@ body {
 
 /* 对话框 - 配置推荐 */
 .dialog-box {
-    max-width: 600px;
+    max-width: 900px;
     margin: 0 auto 2rem;
 }
 .dialog-box .input-row {
@@ -150,35 +150,70 @@ body {
 .dialog-box .btn-primary { background: var(--accent); color: var(--bg-dark); border: none; }
 .dialog-box .btn-primary:hover { background: var(--accent-hover); }
 
-/* 自定义分配 */
-.custom-allocation {
+/* 新增：配置卡片排版 */
+.results-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-    gap: 0.75rem;
-    margin-top: 1rem;
-}
-.custom-allocation label { font-size: 0.85rem; color: var(--text-muted); }
-.custom-allocation input { width: 100%; padding: 0.5rem; }
-
-/* 推荐结果 */
-.result-box {
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 15px;
     margin-top: 1.5rem;
-    padding: 1rem;
-    background: var(--bg-dark);
-    border-radius: 8px;
-    border: 1px solid var(--border);
 }
-.result-item {
+.result-card {
+    background: var(--bg-dark);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 15px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+}
+.comp-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 10px;
+    line-height: 1.4;
+}
+.comp-params {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 15px;
+}
+.param-badge {
+    background: var(--bg-card);
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    padding: 3px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    word-break: break-all;
+}
+.comp-footer {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0.6rem 0;
-    border-bottom: 1px solid var(--border);
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+    margin-top: auto;
 }
-.result-item:last-child { border-bottom: none; }
-.result-item a { color: var(--accent); text-decoration: none; }
-.result-item a:hover { text-decoration: underline; }
-.result-total { font-weight: 700; color: var(--accent); margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--border); }
+.comp-price {
+    font-size: 1.2rem;
+    color: #ff4757;
+    font-weight: bold;
+}
+.comp-link {
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 0.9rem;
+    padding: 4px 10px;
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+.comp-link:hover {
+    background: var(--accent);
+    color: var(--bg-dark);
+}
 
 /* 表格 */
 table { width: 100%; border-collapse: collapse; }

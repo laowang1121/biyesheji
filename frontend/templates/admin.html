@@ -53,11 +53,7 @@
                     <div style="margin-bottom: 1rem;">
                         <button class="btn btn-primary" onclick="showAddComp()">添加配件</button>
                         <div id="addCompForm" class="hidden" style="margin-top: 1rem; padding: 1rem; background: var(--bg-dark); border-radius: 8px; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0.75rem;">
-                            <div><label>品牌</label><input type="text" id="ac_brand"></div>
-                            <div><label>型号</label><input type="text" id="ac_model"></div>
-                            <div><label>价格</label><input type="number" id="ac_price" step="0.01"></div>
-                            <div><label>链接</label><input type="text" id="ac_link" placeholder="https://"></div>
-                            <div id="ac_extra"></div>
+                            <div id="ac_extra" style="display: contents;"></div>
                             <div style="align-self: end;"><button class="btn btn-primary" onclick="addComp()">确认添加</button></div>
                         </div>
                     </div>
@@ -126,14 +122,20 @@
             });
         }
         let currentComp = 'cpu';
+        let currentCompCols = [];
         function loadComponents(comp) {
             currentComp = comp || currentComp;
             api('/api/admin/components/' + currentComp).then(r => {
                 if (!r.success) return;
                 const head = document.getElementById('compHead');
                 const body = document.getElementById('compBody');
-                if (!r.data.length) { head.innerHTML = '<tr><th>暂无数据</th></tr>'; body.innerHTML = ''; return; }
+                if (!r.data.length) {
+                    head.innerHTML = '<tr><th>暂无数据</th></tr>'; body.innerHTML = '';
+                    currentCompCols = [];
+                    return;
+                }
                 const cols = Object.keys(r.data[0]).filter(k => k !== 'id');
+                currentCompCols = cols;
                 head.innerHTML = '<th>ID</th>' + cols.map(c => '<th>' + c + '</th>').join('') + '<th>操作</th>';
                 body.innerHTML = r.data.map(row => `
                     <tr><td>${row.id}</td>${cols.map(c => '<td>' + (row[c] ?? '') + '</td>').join('')}
@@ -151,33 +153,28 @@
                 document.querySelectorAll('#compTabs .tab').forEach(t => t.classList.remove('active'));
                 e.target.classList.add('active');
                 loadComponents(e.target.dataset.comp);
-                updateAddCompExtra(e.target.dataset.comp);
+                // hide form on tab switch
+                document.getElementById('addCompForm').classList.add('hidden');
             }
         });
 
-        const compExtraFields = {
-            cpu: [{k:'series',l:'系列'},{k:'package_type',l:'类型(散片/盒装)'}],
-            motherboard: [{k:'socket',l:'插槽'}],
-            gpu: [{k:'series',l:'系列'},{k:'chip_brand',l:'芯片品牌'}],
-            memory: [{k:'type',l:'类型(DDR4/DDR5)'},{k:'capacity',l:'容量'}],
-            ssd: [{k:'interface',l:'接口(PCIe3.0/4.0)'},{k:'capacity',l:'容量'}],
-            cooling: [{k:'type',l:'类型(风冷/水冷240/水冷360)'}],
-            case: [{k:'style',l:'款式(海景房/普通)'}],
-            psu: [{k:'wattage',l:'功率'},{k:'certification',l:'认证'}]
-        };
-        function updateAddCompExtra(comp) {
+        function updateAddCompExtra() {
             const el = document.getElementById('ac_extra');
-            const fields = compExtraFields[comp] || [];
-            el.innerHTML = fields.map(f => `<div><label>${f.l}</label><input type="text" id="ac_${f.k}"></div>`).join('');
+            if (!currentCompCols || currentCompCols.length === 0) {
+                el.innerHTML = '<div>请先确保表格有数据才能添加哦</div>';
+                return;
+            }
+            el.innerHTML = currentCompCols.map(c => `<div><label>${c}</label><input type="text" id="ac_${c}"></div>`).join('');
         }
         function showAddComp() {
             document.getElementById('addCompForm').classList.toggle('hidden');
-            updateAddCompExtra(currentComp);
+            updateAddCompExtra();
         }
         async function addComp() {
-            const base = { brand: document.getElementById('ac_brand').value, model: document.getElementById('ac_model').value, price: parseFloat(document.getElementById('ac_price').value) || 0, link: document.getElementById('ac_link').value || '' };
-            const fields = compExtraFields[currentComp] || [];
-            fields.forEach(f => { const v = document.getElementById('ac_'+f.k)?.value; if (v) base[f.k] = v; });
+            const base = {};
+            currentCompCols.forEach(c => {
+                base[c] = document.getElementById('ac_' + c)?.value || '';
+            });
             const r = await api('/api/admin/components/' + currentComp, { method: 'POST', body: JSON.stringify(base) });
             if (r.success) { alert('添加成功'); document.getElementById('addCompForm').classList.add('hidden'); loadComponents(); loadCompStats(); }
             else alert(r.msg || '添加失败');

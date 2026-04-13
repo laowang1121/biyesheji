@@ -4,6 +4,7 @@ from flask import request, jsonify
 from flask_login import login_required
 from backend.routes import api_bp
 from backend.algorithm.recommender import ConfigRecommender
+from backend.algorithm.ai_recommender import generate_ai_recommend
 
 
 @api_bp.route('/recommend', methods=['POST'])
@@ -40,7 +41,7 @@ def get_budget_presets():
     return jsonify({
         'success': True,
         'office': {
-            'cpu': '20-25%', 'gpu': '20-25%', 'motherboard': '10-15%', 'memory': '10-20%',
+            'cpu': '25-30%', 'gpu': '15-20%', 'motherboard': '10-15%', 'memory': '10-20%',
             'ssd': '8-15%', 'psu': '5-8%', 'cooling': '3-5%', 'case': '3-5%'
         },
         'gaming': {
@@ -48,3 +49,23 @@ def get_budget_presets():
             'ssd': '5-10%', 'psu': '5-8%', 'cooling': '3-5%', 'case': '3-5%'
         }
     })
+
+
+@api_bp.route('/recommend/ai', methods=['POST'])
+@login_required
+def recommend_ai():
+    """
+    AI自然语言推荐配置
+    Body: { prompt: "我需要一台3000元的办公电脑" }
+    """
+    data = request.get_json() or {}
+    prompt = data.get('prompt', '').strip()
+
+    if not prompt:
+        return jsonify({'success': False, 'msg': '请输入您的需求'})
+
+    try:
+        result = generate_ai_recommend(prompt)
+        return jsonify({'success': True, 'data': result})
+    except Exception as e:
+        return jsonify({'success': False, 'msg': str(e)}), 400

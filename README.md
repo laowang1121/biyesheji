@@ -54,12 +54,8 @@ pip install -r requirements.txt
 python init_db.py
 ```
 
-### 3. 运行爬虫（可选，获取数据）
-```bash
-python run_crawler.py
-```
 
-### 4. 启动应用
+### 3. 启动应用
 ```bash
 python app.py
 ```

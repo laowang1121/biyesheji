@@ -21,9 +21,26 @@ def admin_required(f):
 @admin_required
 def crawler_stats():
     """各配件数据统计"""
+    import sqlite3
+    import os
+    from config import Config
+
     models = {
-        'cpu': CPU, 'motherboard': Motherboard, 'gpu': GPU, 'memory': Memory,
-        'ssd': SSD, 'cooling': Cooling, 'case': Case, 'psu': PSU
+        'cpu': 'cpu_analyzed', 'motherboard': '主板_analyzed', 'gpu': '显卡_analyzed',
+        'memory': '内存条_analyzed', 'ssd': '固态_analyzed', 'cooling': '散热_analyzed',
+        'case': '机箱_analyzed', 'psu': '电源_analyzed'
     }
-    stats = {k: v.query.count() for k, v in models.items()}
+    db_path = os.path.join(Config.BASE_DIR, 'data', 'ai_analyzed.db')
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+
+    stats = {}
+    for k, table in models.items():
+        try:
+            cur.execute(f"SELECT COUNT(*) FROM {table}")
+            stats[k] = cur.fetchone()[0]
+        except Exception:
+            stats[k] = 0
+    conn.close()
+
     return jsonify({'success': True, 'data': stats})
