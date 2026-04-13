@@ -77,20 +77,52 @@ class ConfigRecommender:
 
         components_list = ['cpu', 'motherboard', 'gpu', 'memory', 'ssd', 'cooling', 'case', 'psu']
 
+        mb_generation = None
+        cpu_brand = None
+
         # 初始选择：基础预算内选择最强配置
         for component in components_list:
             budget = self.get_component_budget(component)
             table_name = self._map_to_table(component)
 
-            parts = search_components(table_name, max_price=budget, limit=1, desc=True)
+            kwargs = {'max_price': budget, 'limit': 1, 'desc': True}
+            if component == 'memory' and mb_generation:
+                kwargs['generation'] = mb_generation
+            elif component == 'motherboard' and mb_generation:
+                kwargs['generation'] = mb_generation
+
+            if component in ['motherboard', 'cpu'] and cpu_brand:
+                kwargs['cpu_brand'] = cpu_brand
+
+            parts = search_components(table_name, **kwargs)
             if not parts:
                 # 若无符合的，选最便宜的
-                parts = search_components(table_name, limit=1, desc=False)
+                kwargs['desc'] = False
+                kwargs.pop('max_price', None)
+                parts = search_components(table_name, **kwargs)
 
             if parts:
                 item = parts[0]
                 components_selected[component] = item
                 total_price += float(item.get('价格', item.get('商品价格', 0)))
+
+                # 若选择了CPU，解析其品牌
+                if component == 'cpu' and not cpu_brand:
+                    cpu_name = str(item.get('型号', '')) + ' ' + str(item.get('商品名字', ''))
+                    cpu_name = cpu_name.upper()
+                    if 'R3' in cpu_name or 'R5' in cpu_name or 'R7' in cpu_name or 'R9' in cpu_name or 'AMD' in cpu_name or '锐龙' in cpu_name:
+                        cpu_brand = 'AMD'
+                    else:
+                        cpu_brand = 'Intel'
+
+                # 若刚选择了主板，解析其代数
+                if component == 'motherboard':
+                    mb_name = item.get('商品名字', '').upper()
+                    if 'D4' in mb_name or 'DDR4' in mb_name:
+                        mb_generation = 'DDR4'
+                    else:
+                        mb_generation = 'DDR5'
+
 
         # 调整逻辑限制预算不超100%，不少于90%
         upgrade_priority = ['gpu', 'cpu', 'ssd', 'memory', 'motherboard', 'cooling', 'case', 'psu']
@@ -109,12 +141,24 @@ class ConfigRecommender:
                 table_name = self._map_to_table(comp)
 
                 target_max_price = curr_price - (total_price - self.budget)
+                kwargs_down = {'limit': 1, 'desc': True}
+                if comp == 'memory' and mb_generation:
+                    kwargs_down['generation'] = mb_generation
+                elif comp == 'motherboard' and mb_generation:
+                    kwargs_down['generation'] = mb_generation
+
+                if comp in ['motherboard', 'cpu'] and cpu_brand:
+                    kwargs_down['cpu_brand'] = cpu_brand
+
                 if target_max_price <= 0:
-                    next_items = search_components(table_name, max_price=curr_price-0.01, limit=1, desc=True)
+                    kwargs_down['max_price'] = curr_price - 0.01
+                    next_items = search_components(table_name, **kwargs_down)
                 else:
-                    next_items = search_components(table_name, max_price=target_max_price, limit=1, desc=True)
+                    kwargs_down['max_price'] = target_max_price
+                    next_items = search_components(table_name, **kwargs_down)
                     if not next_items:
-                        next_items = search_components(table_name, max_price=curr_price-0.01, limit=1, desc=True)
+                        kwargs_down['max_price'] = curr_price - 0.01
+                        next_items = search_components(table_name, **kwargs_down)
 
                 if next_items:
                     next_price = float(next_items[0].get('价格', next_items[0].get('商品价格', 0)))
@@ -148,7 +192,30 @@ class ConfigRecommender:
                 cols = [c['name'] for c in cur.fetchall()]
                 price_col = '商品价格' if '商品价格' in cols else '价格'
 
-                cur.execute(f"SELECT * FROM {table_name} WHERE CAST({price_col} AS REAL) > ? AND CAST({price_col} AS REAL) <= ? ORDER BY CAST({price_col} AS REAL) DESC LIMIT 1", (curr_price, max_allowed_price))
+                q_cond = ""
+                q_params = []
+                if comp == 'memory' and mb_generation:
+                    if '代数' in cols:
+                        q_cond = " AND 代数 = ?"
+                        q_params.append(mb_generation)
+                elif comp == 'motherboard' and mb_generation:
+                    if mb_generation == 'DDR4':
+                        q_cond = " AND (商品名字 LIKE '%D4%' OR 商品名字 LIKE '%DDR4%')"
+                    else:
+                        q_cond = " AND (商品名字 NOT LIKE '%D4%' AND 商品名字 NOT LIKE '%DDR4%')"
+
+                if comp == 'motherboard' and cpu_brand:
+                    if cpu_brand == 'AMD':
+                        q_cond += " AND (商品名字 LIKE '%B650%' OR 商品名字 LIKE '%B850%')"
+                    elif cpu_brand == 'Intel':
+                        q_cond += " AND (商品名字 NOT LIKE '%B650%' AND 商品名字 NOT LIKE '%B850%')"
+                elif comp == 'cpu' and cpu_brand:
+                    if cpu_brand == 'AMD':
+                        q_cond += " AND (型号 LIKE '%R%' OR 商品名字 LIKE '%AMD%' OR 商品名字 LIKE '%锐龙%')"
+                    elif cpu_brand == 'Intel':
+                        q_cond += " AND (型号 NOT LIKE '%R%' AND 商品名字 NOT LIKE '%AMD%' AND 商品名字 NOT LIKE '%锐龙%')"
+
+                cur.execute(f"SELECT * FROM {table_name} WHERE CAST({price_col} AS REAL) > ? AND CAST({price_col} AS REAL) <= ? {q_cond} ORDER BY CAST({price_col} AS REAL) DESC LIMIT 1", (curr_price, max_allowed_price) + tuple(q_params))
                 row = cur.fetchone()
                 conn.close()
 
@@ -177,7 +244,30 @@ class ConfigRecommender:
                     cols = [c['name'] for c in cur.fetchall()]
                     price_col = '商品价格' if '商品价格' in cols else '价格'
 
-                    cur.execute(f"SELECT * FROM {table_name} WHERE CAST({price_col} AS REAL) > ? ORDER BY CAST({price_col} AS REAL) ASC LIMIT 1", (curr_price,))
+                    q_cond = ""
+                    q_params = []
+                    if comp == 'memory' and mb_generation:
+                        if '代数' in cols:
+                            q_cond = " AND 代数 = ?"
+                            q_params.append(mb_generation)
+                    elif comp == 'motherboard' and mb_generation:
+                        if mb_generation == 'DDR4':
+                            q_cond = " AND (商品名字 LIKE '%D4%' OR 商品名字 LIKE '%DDR4%')"
+                        else:
+                            q_cond = " AND (商品名字 NOT LIKE '%D4%' AND 商品名字 NOT LIKE '%DDR4%')"
+
+                    if comp == 'motherboard' and cpu_brand:
+                        if cpu_brand == 'AMD':
+                            q_cond += " AND (商品名字 LIKE '%B650%' OR 商品名字 LIKE '%B850%')"
+                        elif cpu_brand == 'Intel':
+                            q_cond += " AND (商品名字 NOT LIKE '%B650%' AND 商品名字 NOT LIKE '%B850%')"
+                    elif comp == 'cpu' and cpu_brand:
+                        if cpu_brand == 'AMD':
+                            q_cond += " AND (型号 LIKE '%R%' OR 商品名字 LIKE '%AMD%' OR 商品名字 LIKE '%锐龙%')"
+                        elif cpu_brand == 'Intel':
+                            q_cond += " AND (型号 NOT LIKE '%R%' AND 商品名字 NOT LIKE '%AMD%' AND 商品名字 NOT LIKE '%锐龙%')"
+
+                    cur.execute(f"SELECT * FROM {table_name} WHERE CAST({price_col} AS REAL) > ? {q_cond} ORDER BY CAST({price_col} AS REAL) ASC LIMIT 1", (curr_price,) + tuple(q_params))
                     row = cur.fetchone()
                     conn.close()
 
@@ -197,12 +287,24 @@ class ConfigRecommender:
                             d_table = self._map_to_table(d_comp)
 
                             target = d_price - (total_price - self.budget)
+                            kwargs_down = {'limit': 1, 'desc': True}
+                            if d_comp == 'memory' and mb_generation:
+                                kwargs_down['generation'] = mb_generation
+                            elif d_comp == 'motherboard' and mb_generation:
+                                kwargs_down['generation'] = mb_generation
+
+                            if d_comp in ['motherboard', 'cpu'] and cpu_brand:
+                                kwargs_down['cpu_brand'] = cpu_brand
+
                             if target <= 0:
-                                lower_items = search_components(d_table, max_price=d_price-0.01, limit=1, desc=True)
+                                kwargs_down['max_price'] = d_price - 0.01
+                                lower_items = search_components(d_table, **kwargs_down)
                             else:
-                                lower_items = search_components(d_table, max_price=target, limit=1, desc=True)
+                                kwargs_down['max_price'] = target
+                                lower_items = search_components(d_table, **kwargs_down)
                                 if not lower_items:
-                                    lower_items = search_components(d_table, max_price=d_price-0.01, limit=1, desc=True)
+                                    kwargs_down['max_price'] = d_price - 0.01
+                                    lower_items = search_components(d_table, **kwargs_down)
 
                             if lower_items:
                                 lower_price = float(lower_items[0].get('价格', lower_items[0].get('商品价格', 0)))
@@ -223,7 +325,16 @@ class ConfigRecommender:
                 curr_price = float(current_item.get('价格', current_item.get('商品价格', 0)))
                 table_name = self._map_to_table(comp)
 
-                lower_items = search_components(table_name, max_price=curr_price-0.01, limit=1, desc=True)
+                kwargs_down = {'max_price': curr_price - 0.01, 'limit': 1, 'desc': True}
+                if comp == 'memory' and mb_generation:
+                    kwargs_down['generation'] = mb_generation
+                elif comp == 'motherboard' and mb_generation:
+                    kwargs_down['generation'] = mb_generation
+
+                if comp in ['motherboard', 'cpu'] and cpu_brand:
+                    kwargs_down['cpu_brand'] = cpu_brand
+
+                lower_items = search_components(table_name, **kwargs_down)
                 if lower_items:
                     lower_price = float(lower_items[0].get('价格', lower_items[0].get('商品价格', 0)))
                     total_price = total_price - curr_price + lower_price

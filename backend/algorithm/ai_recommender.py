@@ -13,7 +13,7 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
-def search_components(table_name, max_price=None, min_price=None, keyword=None, limit=5, desc=True):
+def search_components(table_name, max_price=None, min_price=None, keyword=None, limit=5, desc=True, generation=None, cpu_brand=None):
     """从本地分析库搜索配件"""
     conn = get_db_connection()
     cur = conn.cursor()
@@ -31,6 +31,32 @@ def search_components(table_name, max_price=None, min_price=None, keyword=None, 
     if min_price:
         query += f" AND CAST({price_col} AS REAL) >= ?"
         params.append(min_price)
+
+    if generation and table_name == '内存条_analyzed':
+        if '代数' in cols:
+            query += " AND 代数 = ?"
+            params.append(generation)
+        else:
+            query += f" AND (商品名称 LIKE ? OR 容量 LIKE ? OR 频率 LIKE ?)"
+            params.extend([f"%{generation}%", f"%{generation}%", f"%{generation}%"])
+
+    if generation and table_name == '主板_analyzed':
+        if generation == 'DDR4':
+            query += " AND (商品名字 LIKE '%D4%' OR 商品名字 LIKE '%DDR4%')"
+        elif generation == 'DDR5':
+            query += " AND (商品名字 LIKE '%D5%' OR 商品名字 LIKE '%DDR5%' OR (商品名字 NOT LIKE '%D4%' AND 商品名字 NOT LIKE '%DDR4%'))"
+
+    if cpu_brand and table_name == '主板_analyzed':
+        if cpu_brand == 'AMD':
+            query += " AND (商品名字 LIKE '%B650%' OR 商品名字 LIKE '%B850%')"
+        elif cpu_brand == 'Intel':
+            query += " AND (商品名字 NOT LIKE '%B650%' AND 商品名字 NOT LIKE '%B850%')"
+
+    if cpu_brand and table_name == 'cpu_analyzed':
+        if cpu_brand == 'AMD':
+            query += " AND (型号 LIKE '%R%' OR 商品名字 LIKE '%AMD%' OR 商品名字 LIKE '%锐龙%')"
+        elif cpu_brand == 'Intel':
+            query += " AND (型号 NOT LIKE '%R%' AND 商品名字 NOT LIKE '%AMD%' AND 商品名字 NOT LIKE '%锐龙%')"
 
     order = "DESC" if desc else "ASC"
     query += f" ORDER BY CAST({price_col} AS REAL) {order} LIMIT ?"
@@ -58,6 +84,13 @@ def generate_ai_recommend(prompt: str):
     else:
         budget = 5000
 
+    # 2. 识别品牌倾向
+    forced_brand = None
+    if 'AMD' in prompt.upper() or '锐龙' in prompt or 'B650' in prompt.upper() or 'B850' in prompt.upper():
+        forced_brand = 'AMD'
+    elif 'INTEL' in prompt.upper() or '英特尔' in prompt or 'B760' in prompt.upper() or 'Z790' in prompt.upper() or '酷睿' in prompt:
+        forced_brand = 'Intel'
+
     # 模式分配（粗略）
     if '游戏' in prompt or '电竞' in prompt:
         allocation = {
@@ -75,18 +108,53 @@ def generate_ai_recommend(prompt: str):
     components_selected = {}
     total_price = 0
     result = {'total_budget': budget, 'components': {}, 'ai_message': f"根据需求 '{prompt}'，正在调用 ai_analyzed.db 数据库："}
+    mb_generation = None
+    cpu_brand = forced_brand
+
+    # 第一优先级选主板，以确定代数
+    ordered_tables = ['cpu_analyzed', '主板_analyzed', '显卡_analyzed', '内存条_analyzed', '固态_analyzed', '电源_analyzed', '散热_analyzed', '机箱_analyzed']
 
     # 初始选择：预算以内最强的配件
-    for table, ratio in allocation.items():
+    for table in ordered_tables:
+        if table not in allocation: continue
+        ratio = allocation[table]
         part_budget = budget * ratio
-        parts = search_components(table, max_price=part_budget, limit=1, desc=True)
+
+        kwargs = {'max_price': part_budget, 'limit': 1, 'desc': True}
+        if mb_generation:
+            if table == '内存条_analyzed':
+                kwargs['generation'] = mb_generation
+            elif table == '主板_analyzed':
+                kwargs['generation'] = mb_generation
+
+        if cpu_brand and table in ['主板_analyzed', 'cpu_analyzed']:
+            kwargs['cpu_brand'] = cpu_brand
+
+        parts = search_components(table, **kwargs)
         if not parts:
-            parts = search_components(table, limit=1, desc=False) # 取最便宜的
+            kwargs['desc'] = False
+            kwargs.pop('max_price', None)
+            parts = search_components(table, **kwargs)
 
         if parts:
             part = parts[0]
             components_selected[table] = part
             total_price += float(part.get('价格', part.get('商品价格', 0)))
+
+            if table == 'cpu_analyzed' and not cpu_brand:
+                cpu_name = str(part.get('型号', '')) + ' ' + str(part.get('商品名字', ''))
+                cpu_name = cpu_name.upper()
+                if 'R3' in cpu_name or 'R5' in cpu_name or 'R7' in cpu_name or 'R9' in cpu_name or 'AMD' in cpu_name or '锐龙' in cpu_name:
+                    cpu_brand = 'AMD'
+                else:
+                    cpu_brand = 'Intel'
+
+            if table == '主板_analyzed':
+                mb_name = part.get('商品名字', '').upper()
+                if 'D4' in mb_name or 'DDR4' in mb_name:
+                    mb_generation = 'DDR4'
+                else:
+                    mb_generation = 'DDR5'
 
     # ========= 预算控制逻辑 90% - 100% =========
     upgrade_priority = ['显卡_analyzed', 'cpu_analyzed', '固态_analyzed', '内存条_analyzed', '主板_analyzed', '电源_analyzed', '散热_analyzed', '机箱_analyzed']
@@ -105,12 +173,24 @@ def generate_ai_recommend(prompt: str):
 
             target_max = curr_price - (total_price - budget)
 
+            kwargs_down = {'limit': 1, 'desc': True}
+            if comp == '内存条_analyzed' and mb_generation:
+                kwargs_down['generation'] = mb_generation
+            elif comp == '主板_analyzed' and mb_generation:
+                kwargs_down['generation'] = mb_generation
+
+            if cpu_brand and comp in ['主板_analyzed', 'cpu_analyzed']:
+                kwargs_down['cpu_brand'] = cpu_brand
+
             if target_max <= 0:
-                next_items = search_components(comp, max_price=curr_price-0.01, limit=1, desc=True)
+                kwargs_down['max_price'] = curr_price - 0.01
+                next_items = search_components(comp, **kwargs_down)
             else:
-                next_items = search_components(comp, max_price=target_max, limit=1, desc=True)
+                kwargs_down['max_price'] = target_max
+                next_items = search_components(comp, **kwargs_down)
                 if not next_items:
-                    next_items = search_components(comp, max_price=curr_price-0.01, limit=1, desc=True)
+                    kwargs_down['max_price'] = curr_price - 0.01
+                    next_items = search_components(comp, **kwargs_down)
 
             if next_items:
                 components_selected[comp] = next_items[0]
@@ -142,7 +222,30 @@ def generate_ai_recommend(prompt: str):
             cols = [c['name'] for c in cur.fetchall()]
             price_col = '商品价格' if '商品价格' in cols else '价格'
 
-            cur.execute(f"SELECT * FROM {comp} WHERE CAST({price_col} AS REAL) > ? AND CAST({price_col} AS REAL) <= ? ORDER BY CAST({price_col} AS REAL) DESC LIMIT 1", (curr_price, max_allowed))
+            q_cond = ""
+            q_params = []
+            if comp == '内存条_analyzed' and mb_generation:
+                if '代数' in cols:
+                    q_cond = " AND 代数 = ?"
+                    q_params.append(mb_generation)
+            elif comp == '主板_analyzed' and mb_generation:
+                if mb_generation == 'DDR4':
+                    q_cond = " AND (商品名字 LIKE '%D4%' OR 商品名字 LIKE '%DDR4%')"
+                else:
+                    q_cond = " AND (商品名字 NOT LIKE '%D4%' AND 商品名字 NOT LIKE '%DDR4%')"
+
+            if comp == '主板_analyzed' and cpu_brand:
+                if cpu_brand == 'AMD':
+                    q_cond += " AND (商品名字 LIKE '%B650%' OR 商品名字 LIKE '%B850%')"
+                elif cpu_brand == 'Intel':
+                    q_cond += " AND (商品名字 NOT LIKE '%B650%' AND 商品名字 NOT LIKE '%B850%')"
+            elif comp == 'cpu_analyzed' and cpu_brand:
+                if cpu_brand == 'AMD':
+                    q_cond += " AND (型号 LIKE '%R%' OR 商品名字 LIKE '%AMD%' OR 商品名字 LIKE '%锐龙%')"
+                elif cpu_brand == 'Intel':
+                    q_cond += " AND (型号 NOT LIKE '%R%' AND 商品名字 NOT LIKE '%AMD%' AND 商品名字 NOT LIKE '%锐龙%')"
+
+            cur.execute(f"SELECT * FROM {comp} WHERE CAST({price_col} AS REAL) > ? AND CAST({price_col} AS REAL) <= ? {q_cond} ORDER BY CAST({price_col} AS REAL) DESC LIMIT 1", (curr_price, max_allowed) + tuple(q_params))
             row = cur.fetchone()
             conn.close()
 

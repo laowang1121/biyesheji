@@ -136,9 +136,9 @@
                 }
                 const cols = Object.keys(r.data[0]).filter(k => k !== 'id');
                 currentCompCols = cols;
-                head.innerHTML = '<th>ID</th>' + cols.map(c => '<th>' + c + '</th>').join('') + '<th>操作</th>';
+                head.innerHTML = '' + cols.map(c => '<th>' + c + '</th>').join('') + '<th>操作</th>';
                 body.innerHTML = r.data.map(row => `
-                    <tr><td>${row.id}</td>${cols.map(c => '<td>' + (row[c] ?? '') + '</td>').join('')}
+                    <tr>${cols.map(c => '<td>' + (row[c] ?? '') + '</td>').join('')}
                     <td><button class="btn-sm btn-del" onclick="delComp(${row.id})">删除</button></td></tr>
                 `).join('');
             });
